@@ -3,27 +3,22 @@ import numpy as np
 import onnxruntime
 import os
 
-
 class FastReID:
-  def __init__(self, reid_type) -> None:
-
+  def __init__(self, onnx_path, reid_type) -> None:
+      self.ort_sess = onnxruntime.InferenceSession(onnx_path,
+      providers=['CUDAExecutionProvider']
+  )
       self.reid_type = reid_type # person or vehicle
 
       if self.reid_type == 'person':
         self.image_height = 256
         self.image_width = 128
-        onnx_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'fastreid_person.onnx')
       elif self.reid_type == 'vehicle':
         self.image_height = 256
         self.image_width = 256
-        onnx_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'fastreid_vehicle.onnx')
       else:
         raise ValueError("Invalid reid_type. Must be 'person' or 'vehicle'.")
-     
-     
-      self.ort_sess = onnxruntime.InferenceSession(onnx_path,
-      providers=['CUDAExecutionProvider']
-        )
+
 
   def preprocess(self, image_array):
     # The input image_array is expected to be BGR from cv2.VideoCapture or similar
