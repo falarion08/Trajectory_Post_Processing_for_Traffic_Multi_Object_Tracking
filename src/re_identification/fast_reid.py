@@ -12,11 +12,11 @@ class FastReID:
       if self.reid_type == 'person':
         self.image_height = 256
         self.image_width = 128
-        onnx_path = os.path.join(os.path.dirname(__file__), 'models', 'fastreid_person.onnx')
+        onnx_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'fastreid_person.onnx')
       elif self.reid_type == 'vehicle':
         self.image_height = 256
         self.image_width = 256
-        onnx_path = os.path.join(os.path.dirname(__file__), 'models', 'fastreid_vehicle.onnx')
+        onnx_path = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'fastreid_vehicle.onnx')
       else:
         raise ValueError("Invalid reid_type. Must be 'person' or 'vehicle'.")
      
