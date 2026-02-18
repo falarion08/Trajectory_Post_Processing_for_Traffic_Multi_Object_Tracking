@@ -1,3 +1,39 @@
+import cv2 
+import numpy as np
+from fastreid.reid import FastReID
+import os
+
+
+def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
+    # Assuming frame_array is a numpy array representing the frame
+    # and reid_model is a FastReID model instance
+    
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    
+    else:
+        cap = cv2.VideoCapture(video_path)
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+        ret, frame_array = cap.read()
+
+        if ret:
+            # Crop the frame to the bounding box
+            x, y, w, h = bounding_box
+            x2 = w + x
+            y2 = h + y
+            frame_array = frame_array[int(y):int(y2), int(x):int(x2)]
+            
+            appearance_vector = reid_model.run_inference_on_frame(frame_array)
+
+            cap.release()
+            return appearance_vector
+            
+        else:
+            cap.release()
+            raise ValueError(f"Could not read frame {frame_id} from video {video_path}")
+
+
 def calculate_iou(box1_left, box1_top, box1_width, box1_height, box2_left, box2_top, box2_width, box2_height):
     # Convert (left, top, width, height) to (x1, y1, x2, y2) format
     box1 = [box1_left, box1_top, box1_left + box1_width, box1_top + box1_height]
