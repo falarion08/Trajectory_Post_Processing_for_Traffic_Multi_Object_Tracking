@@ -47,10 +47,14 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
             raise ValueError(f"Could not read frame {frame_id} from video {video_path}")
 
 
-def calculate_iou(box1_left, box1_top, box1_width, box1_height, box2_left, box2_top, box2_width, box2_height):
+def calculate_iou(bbox1,bbox2):
     # Convert (left, top, width, height) to (x1, y1, x2, y2) format
-    box1 = [box1_left, box1_top, box1_left + box1_width, box1_top + box1_height]
-    box2 = [box2_left, box2_top, box2_left + box2_width, box2_top + box2_height]
+    x1,y1,w1,h1 = bbox1
+    x2,y2,w2,h2 = bbox2
+
+
+    box1 = [x1, y1, x1 + w1, y1 + h1]
+    box2 = [x2, y2, x2 + w2, y2 + h2]
 
     # Determine the coordinates of the intersection rectangle
     x_left = max(box1[0], box2[0])
