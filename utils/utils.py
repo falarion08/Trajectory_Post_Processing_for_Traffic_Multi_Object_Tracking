@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from fastreid.reid import FastReID
 import os
-
+import math
 
 def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
     """
@@ -74,3 +74,37 @@ def calculate_iou(box1_left, box1_top, box1_width, box1_height, box2_left, box2_
     iou = intersection_area / union_area
 
     return iou
+
+def get_bounding_box_ratio(bbox1:list, bbox2:list):
+    """
+    Compute for the ratio of the bounding box width and height 
+    given two bounding boxes
+    
+    :param bbox1: Bounding box of object 1
+    :type bbox1: list
+    :param bbox2: Bounding Box of object22
+    :type bbox2: list
+    """
+    x1,y1,w1,h1 = bbox1
+    x2,y2,w2,h2 = bbox2
+
+    return [w1/w2, h1/h2]
+
+
+def get_direction(bbox1:list,bbox2:list):
+    """
+    Returns direction between two points as radians
+    
+    :param bbox1: Bounding box of object 1
+    :type bbox1: list
+    :param bbox2: Bounding Box of object22
+    :type bbox2: list
+    """
+    x1,y1,w1,h1 = bbox1
+    x2,y2,w2,h2 = bbox2
+    
+    dx = x2 - x1
+    dy = y2 - y1
+    dir = math.atan2(dx,dy)
+
+    return dir 
