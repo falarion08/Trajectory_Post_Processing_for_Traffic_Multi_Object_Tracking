@@ -3,6 +3,8 @@ import numpy as np
 from fastreid.reid import FastReID
 import os
 import math
+from scipy.spatial.distance import euclidean
+
 
 def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
     """
@@ -108,3 +110,18 @@ def get_direction(bbox1:list,bbox2:list):
     dir = math.atan2(dx,dy)
 
     return dir 
+
+def get_euclidean_distance(bbox1:list,bbox2:list):
+    """
+    Returns euclidean distance between two points
+    
+    :param bbox1: Bounding box of object 1
+    :type bbox1: list
+    :param bbox2: Bounding Box of object22
+    :type bbox2: list
+    """
+    x1,y1,w1,h1 = bbox1
+    x2,y2,w2,h2 = bbox2
+
+    return euclidean([x1,y1],[x2,y2])
+    
