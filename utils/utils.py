@@ -5,8 +5,19 @@ import os
 
 
 def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
-    # Assuming frame_array is a numpy array representing the frame
-    # and reid_model is a FastReID model instance
+    """
+        Returns an vector embedding for a cropped imaged from a given frame on a video
+    
+    :param video_path: Relative path for the video path
+    :type video_path: str
+    :param frame_id: Frame number to look for in a video
+    :type frame_id: int
+    :param reid_model: FastReID Model
+    :type reid_model: FastReID
+    :param bounding_box: A bounding box containing top left coordinate (x,y), width, and height of the bounding box as a list
+    :type bounding_box: list
+    """
+
     
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
