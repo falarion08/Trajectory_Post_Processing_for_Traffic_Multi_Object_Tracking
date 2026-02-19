@@ -8,7 +8,8 @@ from scipy.spatial.distance import euclidean
 
 def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
     """
-        Returns an vector embedding for a cropped imaged from a given frame on a video
+        Returns an vector embedding for a cropped imaged from a given frame on a video.
+        Assuming it counting is 1 based (starts at frame 1).
     
     :param video_path: Relative path for the video path
     :type video_path: str
@@ -19,7 +20,7 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
     :param bounding_box: A bounding box containing top left coordinate (x,y), width, and height of the bounding box as a list
     :type bounding_box: list
     """
-
+    frame_id = frame_id - 1
     
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
