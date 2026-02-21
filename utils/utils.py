@@ -112,9 +112,9 @@ def get_direction(bbox1:list,bbox2:list):
     
     dx = x2 - x1
     dy = y2 - y1
-    dir = math.atan2(dx,dy)
+    direction = math.atan2(dx,dy)
 
-    return dir 
+    return direction 
 
 def get_euclidean_distance(bbox1:list,bbox2:list):
     """
