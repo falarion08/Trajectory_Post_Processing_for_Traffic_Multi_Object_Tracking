@@ -1,6 +1,8 @@
 import pandas as pd
-from tracklet import Track
+from tracklet import Tracklet
 import numpy as np
+
+
 class TrajectoryBreakPhase:
   def __init__(self,input_csv_filename:str,video_fps:int,mahalanobis_distance_thresh:float=1.9) -> None:
     self.mot_df = pd.read_csv(input_csv_filename)
@@ -92,7 +94,6 @@ class KalmanFilter2D:
     self.ending_frame = measured_trajectory_points[-1][0]
     self.innovation_residual = np.array([])
     self.inv_innovation_covariance = np.array([])
-
 
 
   def initialize_matrices(self):
