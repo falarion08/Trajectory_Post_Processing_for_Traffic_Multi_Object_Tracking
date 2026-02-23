@@ -1,5 +1,5 @@
 import pandas as pd
-from tracklet import Tracklet
+from .tracklet import Track
 import numpy as np
 
 
