@@ -12,7 +12,7 @@ class TrajectoryBreakPhase:
     tracklet_list = []
     start_index_copy = 0
 
-    # Iterate through the distances and corresponding track points
+    # Iterate through the distances and corresponding track points.
     for i in range(len(distance_list)):
 
       # A break is detected if the current point's Mahalanobis distance is above threshold
