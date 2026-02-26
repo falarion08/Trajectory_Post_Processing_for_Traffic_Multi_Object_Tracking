@@ -821,7 +821,6 @@ class LinkingPhase:
     tracks.sort(key=lambda x: x.start_frame)
     tracks_df = pd.DataFrame()
     for i,track in enumerate(tracks):
-      print(i)
       final_class, _ = self.rescore(track)
       df = pd.DataFrame(track.track_list)
       df['class_name'] = final_class
@@ -829,7 +828,7 @@ class LinkingPhase:
 
       tracks_df = pd.concat([tracks_df,df])
 
-    tracks_df.to_csv(csv_filename)
+    tracks_df.to_csv(csv_filename,drop_index=True)
 
   def rescore(self,track:Track):
     """
