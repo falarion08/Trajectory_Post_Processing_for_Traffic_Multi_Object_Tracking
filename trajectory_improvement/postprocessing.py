@@ -828,7 +828,7 @@ class LinkingPhase:
 
       tracks_df = pd.concat([tracks_df,df])
 
-    tracks_df.to_csv(csv_filename,drop_index=True)
+    tracks_df.to_csv(csv_filename,index=False)
 
   def rescore(self,track:Track):
     """
