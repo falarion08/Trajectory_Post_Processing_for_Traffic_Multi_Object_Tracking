@@ -685,8 +685,8 @@ class LinkingPhase:
              detected_tracklet.track_list[0].get('bb_height')
             ]
 
-    appearance_vector1 = extract_appearance_vector_from_frame(self.video_path,untracked_tracklet.track_list[-1].get('frame_number') + 1,reid_model,bbox1)
-    appearance_vector2 = extract_appearance_vector_from_frame(self.video_path,detected_tracklet.track_list[0].get('frame_number') + 1, reid_model,bbox2)
+    appearance_vector1 = extract_appearance_vector_from_frame(self.video_path,untracked_tracklet.track_list[-1].get('frame_number'),reid_model,bbox1)
+    appearance_vector2 = extract_appearance_vector_from_frame(self.video_path,detected_tracklet.track_list[0].get('frame_number'), reid_model,bbox2)
 
 
     iou = calculate_iou(bbox1,bbox2)

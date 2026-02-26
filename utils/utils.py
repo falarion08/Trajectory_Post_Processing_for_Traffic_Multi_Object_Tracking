@@ -50,7 +50,7 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
     else:
         cap = cv2.VideoCapture(video_path)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+        cap.set(cv2.CAP_PROP_POS_FRAMES-1, frame_id)
         ret, frame_array = cap.read()
 
         if ret:
