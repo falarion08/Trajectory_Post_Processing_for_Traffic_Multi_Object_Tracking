@@ -16,12 +16,62 @@ from ..utils.utils import (
 
 
 class TrajectoryBreakPhase:
+  """
+  TrajectoryBreakPhase is responsible for breaking long object trajectories into smaller tracklets
+  (trajectory segments) at points where sudden motion anomalies are detected.
+  
+  This class uses a Kalman filter to predict expected object motion and compares actual measurements
+  against predictions using the Mahalanobis distance metric. When a measurement deviates significantly
+  from the prediction (exceeds threshold), the trajectory is broken at that point.
+  
+  This segmentation is useful for:
+  - Detecting occlusions or temporary disappearances
+  - Identifying sudden direction/speed changes that might indicate tracking errors
+  - Creating tracklets that can later be linked together in the LinkingPhase
+  
+  Typical workflow:
+  1. Load MOT (Multi-Object Tracking) format CSV file
+  2. For each unique tracked object, extract trajectory
+  3. Run Kalman filter to compute Mahalanobis distances for each frame
+  4. Split trajectory into segments at break points (high Mahalanobis distance)
+  5. Return list of Track objects representing the broken tracklets
+  """
+  
   def __init__(self,input_csv_filename:str,video_fps:int,mahalanobis_distance_thresh:float=1.9) -> None:
+    """
+    Initialize the TrajectoryBreakPhase with MOT data.
+    
+    Args:
+        input_csv_filename (str): Path to the MOT format CSV file with tracking data
+        video_fps (int): Frames per second of the video (used to compute measurement period for Kalman filter)
+        mahalanobis_distance_thresh (float): Threshold for breaking trajectories (default: 1.9).
+                                           When Mahalanobis distance exceeds this, a break is detected.
+    """
     self.mot_df = pd.read_csv(input_csv_filename)
     self.video_fps = video_fps
     self.thresh = mahalanobis_distance_thresh
 
   def process_trajectory(self,filtered_track:pd.DataFrame,distance_list:list[int]):
+    """
+    Split a trajectory into tracklets at points where Mahalanobis distance exceeds threshold.
+    
+    Algorithm:
+    1. Iterate through each measurement and its corresponding Mahalanobis distance
+    2. When distance >= threshold, mark as break point
+    3. Extract segment from previous break point to current break point
+    4. Create a Track object for each non-empty segment
+    5. Return list of all tracklets
+    
+    Args:
+        filtered_track (pd.DataFrame): DataFrame containing all detections for a single track ID,
+                                      sorted by frame_number. Must include columns: frame_number,
+                                      x_center, y_center, and other detection attributes.
+        distance_list (list[int]): List of Mahalanobis distances computed by Kalman filter.
+                                  Length should match filtered_track rows.
+    
+    Returns:
+        list[Track]: List of Track objects representing trajectory segments (tracklets)
+    """
     filtered_track = filtered_track.reset_index(drop=True) # Ensure contiguous 0-based index and drop old index
     tracklet_list = []
     start_index_copy = 0
@@ -65,7 +115,22 @@ class TrajectoryBreakPhase:
 
 
   def create_trackelts(self):
-
+    """
+    Main method that processes all trajectories from the MOT DataFrame and breaks them into tracklets.
+    
+    Process:
+    1. Extract all unique tracker IDs from the input MOT data
+    2. For each tracker ID:
+       a. Filter detections for that specific ID
+       b. Extract trajectory coordinates (frame_number, x_center, y_center)
+       c. Initialize Kalman filter with trajectory
+       d. Compute Mahalanobis distances
+       e. Break trajectory into segments at anomaly points
+    3. Combine all tracklets from all tracking IDs
+    
+    Returns:
+        list[Track]: Complete list of broken tracklets from all objects in the video
+    """
     # Get all unique ID in present from the output
     track_id_list = self.mot_df['tracker_id'].unique()
     broken_track_list = []
@@ -94,10 +159,39 @@ class TrajectoryBreakPhase:
 
 class KalmanFilter2D:
   """
-    An implementation of Kalman Filter using Constant Acceleration Model.
-    This predicts the x,y center coordinate of a vehicle trajectory.
+  A 2D Kalman Filter implementation using a Constant Acceleration Model.
+  
+  This filter predicts the x,y center coordinates of a moving object trajectory and computes
+  the Mahalanobis distance between predicted and actual measurements. High Mahalanobis distances
+  indicate anomalous detections that deviate from expected motion patterns.
+  
+  State Vector (6D): [x, vx, ax, y, vy, ay]
+    - x, y: position
+    - vx, vy: velocity
+    - ax, ay: acceleration
+  
+  Measurement Vector (2D): [x_measured, y_measured]
+  
+  The filter uses:
+  - State Transition Matrix (F): Predicts next state given current state
+  - Measurement Matrix (H): Maps state to observable measurements
+  - Process Noise Covariance (Q): Uncertainty in the motion model
+  - Measurement Covariance (R): Uncertainty in the sensor measurements
+  - State Covariance (P): Uncertainty in the state estimate
   """
   def __init__(self,measurement_period, measurement_error_std, acceleration_std,measured_trajectory_points):
+    """
+    Initialize the 2D Kalman Filter.
+    
+    Args:
+        measurement_period (float): Time interval between measurements (typically 1/fps)
+        measurement_error_std (float): Standard deviation of measurement noise (in pixels).
+                                      Controls how much we trust the measurements.
+        acceleration_std (float): Standard deviation of process noise (in pixels/frame^2).
+                                Represents uncertainty in constant acceleration model.
+        measured_trajectory_points (list): List of [frame_number, x_center, y_center] tuples
+                                          representing the object's trajectory to analyze.
+    """
     self.measurement_period = measurement_period
     self.measurement_error_std = measurement_error_std
     self.acceleration_std = acceleration_std
@@ -109,15 +203,27 @@ class KalmanFilter2D:
 
 
   def initialize_matrices(self):
-
+    """
+    Initialize all matrices used in the Kalman filter equations.
+    
+    Sets up:
+    - H (Measurement Matrix): Maps 6D state to 2D measurement space
+    - F (State Transition Matrix): Predicts next state using constant acceleration model
+    - Q (Process Noise Covariance): Represents model uncertainty
+    - R (Measurement Covariance): Represents sensor uncertainty
+    - X (Initial State Estimate): Initialized with first measurement
+    - P (Initial State Covariance): High uncertainty initially
+    """
     dt = self.measurement_period
 
-    # Initialize matrix H
+    # Initialize matrix H (measurement matrix)
+    # Extracts x and y positions from the 6D state vector
     self.measurement_matrix = np.array([
         [1,0,0,0,0,0],
         [0,0,0,1,0,0]
     ])
-    # Create a 6x6 measure for matrix F
+    # Create 6x6 State Transition Matrix F for constant acceleration model
+    # Assumes constant acceleration; position is updated based on velocity and acceleration
     self.state_transition_matrix = np.array([
         [1,dt,0.5*dt**2,0,0,0],
         [0,1,dt,0,0,0],
@@ -127,7 +233,8 @@ class KalmanFilter2D:
         [0,0,0,0,0,1]
         ])
 
-    # Initialize matrix Q
+    # Initialize matrix Q (process noise covariance)
+    # Scales with acceleration_std; higher values allow more freedom in motion
     self.process_noise_covariance = np.array([
         [dt**4,dt**3,dt**2,0,0,0],
         [dt**3,dt**2,dt,0,0,0],
@@ -138,19 +245,21 @@ class KalmanFilter2D:
     ])
     self.process_noise_covariance = self.process_noise_covariance * self.acceleration_std**2
 
-    # Initialize matrix R
+    # Initialize matrix R (measurement covariance)
+    # Higher values mean less trust in measurements
     self.measurement_covariance = np.array([
         [self.measurement_error_std**2,0],
         [0,self.measurement_error_std**2]
     ])
 
-    # Initialize state phase X0,0
+    # Initialize state estimate X (6D vector: [x, vx, ax, y, vy, ay])
+    # Initialize with first measurement position, zero velocity and acceleration
     _,first_x,first_y = self.measured_trajectory_points[0]
-    # self.state_estimate = np.zeros(6,1)
     self.state_estimate = np.array([first_x,0,0,first_y,0,0])
     self.state_estimate = self.state_estimate.reshape(-1,1)
 
-    # Initalize matrix P0,0
+    # Initialize covariance estimate P (6x6 matrix representing state uncertainty)
+    # High initial values (500) indicate we start with high uncertainty that decreases with measurements
     self.covariance_estimate = np.array([
         [500,0,0,0,0,0],
         [0,500,0,0,0,0],
@@ -161,39 +270,78 @@ class KalmanFilter2D:
     ])
 
   def predict_state(self):
-    # Predict the next state
+    """
+    Prediction step: Advance the state and covariance estimates to the next time step.
+    
+    Equations:
+    - State prediction: X = F * X
+    - Covariance prediction: P = F * P * F^T + Q
+    
+    This step propagates the current state forward in time without considering measurements.
+    """
+    # Predict the next state using state transition matrix
     self.state_estimate = self.state_transition_matrix @ self.state_estimate
-    # Predict the next covariance
+    # Predict the next covariance and add process noise uncertainty
     self.covariance_estimate = self.state_transition_matrix @ self.covariance_estimate @ self.state_transition_matrix.T + self.process_noise_covariance
 
   def update_state(self, measurement):
-
-    # Convert measurement tuple to a numpy array (2x1)
+    """
+    Update step: Incorporate measurement observation into the state estimate.
+    
+    Equations:
+    - Innovation (residual): y = Z - H * X
+    - Innovation Covariance: S = H * P * H^T + R
+    - Kalman Gain: K = P * H^T * S^(-1)
+    - State update: X = X + K * y
+    - Covariance update: P = (I - K * H) * P
+    
+    Args:
+        measurement (tuple): Two-element tuple (x_measured, y_measured) from the detection
+    """
+    # Convert measurement tuple to a numpy column vector (2x1)
     measurement_vector = np.array([[measurement[0]], [measurement[1]]])
 
-    # Compute for the innovation residual and inverse innovation covariance
-
+    # Compute innovation residual: difference between measured and predicted values
     self.innovation_residual = measurement_vector - self.measurement_matrix @ self.state_estimate
 
+    # Compute inverse of innovation covariance matrix
+    # S = H*P*H^T + R (total uncertainty in measurement space)
     self.inv_innovation_covariance = np.linalg.inv(self.measurement_matrix @ self.covariance_estimate @ \
                                 self.measurement_matrix.T + self.measurement_covariance)
 
 
-    # Compute Kalman Gain
+    # Compute Kalman Gain: how much to trust the measurement vs prediction
     kalman_gain = self.covariance_estimate @ self.measurement_matrix.T @ self.inv_innovation_covariance
 
-    # Update state estimate
+    # Update state estimate with weighted innovation
     self.state_estimate = self.state_estimate + kalman_gain @ self.innovation_residual
 
-    # Update covariance estimate
+    # Update covariance estimate: reduce uncertainty after incorporating measurement
     self.covariance_estimate = (np.eye(self.covariance_estimate.shape[0]) - kalman_gain @ self.measurement_matrix) @ self.covariance_estimate
 
   def run_kalman_filter(self):
     """
-    Runs the Kalman filter on the measured trajectory points and compute the mahalanobis distance between
-    the actual measurement and the predicted measurement.
+    Main method: Run Kalman filter on the trajectory and compute Mahalanobis distances.
+    
+    Algorithm:
+    1. Initialize filter matrices
+    2. For each frame from start to end:
+       a. Perform prediction step (advance state forward)
+       b. If measurement exists in this frame:
+          - Perform update step (incorporate measurement)
+          - Compute Mahalanobis distance between predicted and measured positions
+          - Store distance for later breakpoint detection
+       c. Move to next predicted frame
+    
+    The Mahalanobis distance quantifies how many standard deviations away the measurement is
+    from the prediction. High values indicate anomalies (potential occlusions, tracking errors, etc.)
+    
+    Returns:
+        list[float]: List of Mahalanobis distances for each measurement point.
+                    Distance = sqrt(innovation^T * S^(-1) * innovation)
+                    where innovation = measurement - prediction
+                    and S is the innovation covariance matrix
     """
-
     computed_distances = []
 
     i = 0
@@ -202,26 +350,26 @@ class KalmanFilter2D:
     self.initialize_matrices()
 
     # Run the kalman filter for the range of frame that contains the measurements for the unique track
-
     while current_frame <= self.ending_frame:
-      # Prediction step
+      # Prediction step: advance state forward in time
       self.predict_state()
 
-
+      # Get measurement for current frame (if available)
       frame_number,x_center,y_center = self.measured_trajectory_points[i]
 
       if current_frame == frame_number:
-        # Only update the state when there is a estimate present within the frame
+        # Update step: incorporate measurement into state estimate
         self.update_state(measurement=(x_center,y_center))
 
+        # Compute Mahalanobis distance: how many standard deviations away is the measurement?
         mahalanobis_distance = np.sqrt(self.innovation_residual.T @ self.inv_innovation_covariance @ self.innovation_residual)
         mahalanobis_distance = mahalanobis_distance[0][0] # Extract the scalar value
-        mahalanobis_distance = round(mahalanobis_distance,4) # Round to the nearest 4 decimal places
+        mahalanobis_distance = round(mahalanobis_distance,4) # Round to 4 decimal places
         computed_distances.append(mahalanobis_distance)
 
         i = i + 1
 
-
+      # Move to next frame
       current_frame = current_frame + 1
 
     return computed_distances
