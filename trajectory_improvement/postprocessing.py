@@ -4,15 +4,16 @@ import pickle
 from sklearn.linear_model import LogisticRegression
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cosine
-from .tracklet import Track
-from ..fastreid.reid import FastReID
-from ..utils.utils import (
+from trajectory_improvement.tracklet import Track
+from fastreid.reid import FastReID
+from utils.utils import (
     extract_appearance_vector_from_frame,
     calculate_iou,
     get_euclidean_distance,
     get_bounding_box_ratio,
     get_direction
 )
+
 
 
 class TrajectoryBreakPhase:
