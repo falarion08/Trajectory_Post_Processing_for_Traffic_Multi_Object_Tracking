@@ -475,7 +475,7 @@ class LinkingPhase:
 
     self.linked_track_list.extend(self.untracked_tracklets)
     self.finalize_tracklist(
-        track= self.linked_track_list,
+        tracks= self.linked_track_list,
         csv_filename= self.csv_filename
         )
 
