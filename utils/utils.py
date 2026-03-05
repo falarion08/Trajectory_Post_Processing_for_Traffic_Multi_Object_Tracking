@@ -6,6 +6,7 @@ import math
 from scipy.spatial.distance import euclidean
 
 
+
 def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
     """
     Extract appearance feature vector for a region of interest from a specific video frame.
@@ -50,7 +51,7 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
     else:
         cap = cv2.VideoCapture(video_path)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES-1, frame_id)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id - 1)
         ret, frame_array = cap.read()
 
         if ret:
@@ -59,6 +60,7 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
             x2 = w + x
             y2 = h + y
             frame_array = frame_array[int(y):int(y2), int(x):int(x2)]
+
             
             appearance_vector = reid_model.run_inference_on_frame(frame_array)
 
@@ -162,7 +164,7 @@ def get_bounding_box_ratio(bbox1:list, bbox2:list):
     return [w1/w2, h1/h2]
 
 
-def get_direction(bbox1:list, bbox2:list):
+def get_direction(coord1:tuple, coord2:list):
     """
     Compute the directional angle from one bounding box to another.
     
@@ -192,12 +194,14 @@ def get_direction(bbox1:list, bbox2:list):
         >>> direction = get_direction([0, 0, 100, 100], [100, 100, 100, 100])
         >>> print(direction)  # Output: angle in radians
     """
-    x1,y1,w1,h1 = bbox1
-    x2,y2,w2,h2 = bbox2
+    x1,y1 = coord1
+    x2,y2 = coord2
     
     dx = x2 - x1
     dy = y2 - y1
+
     direction = math.atan2(dx,dy)
+
 
     return direction 
 

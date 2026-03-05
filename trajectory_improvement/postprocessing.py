@@ -828,6 +828,7 @@ class LinkingPhase:
 
       tracks_df = pd.concat([tracks_df,df])
 
+    tracks_df.sort_values(by=['frame_number','tracker_id'],inplace=True)
     tracks_df.to_csv(csv_filename,index=False)
 
   def rescore(self,track:Track):
