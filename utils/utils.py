@@ -187,7 +187,7 @@ def get_direction(coord1:tuple, coord2:list):
               - -π/2 radians = moving left
     
     Note:
-        The function uses the top-left corner coordinates (x, y) of each bounding box.
+        The function uses the center-coordinates (x, y) of each bounding box.
         The direction is relative to the box's position, not its center.
     
     Example:

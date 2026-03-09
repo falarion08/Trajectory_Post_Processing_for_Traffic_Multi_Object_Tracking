@@ -3,7 +3,7 @@ import numpy as np
 import pickle
 from sklearn.linear_model import LogisticRegression
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial.distance import cosine
+from sklearn.metrics.pairwise import cosine_similarity
 from trajectory_improvement.tracklet import Track
 from fastreid.reid import FastReID
 from utils.utils import (
@@ -11,7 +11,8 @@ from utils.utils import (
     calculate_iou,
     get_euclidean_distance,
     get_bounding_box_ratio,
-    get_direction
+    get_direction,
+    
 )
 
 
@@ -646,7 +647,7 @@ class LinkingPhase:
     2. Euclidean Distance: Spatial distance between box centers
     3. Aspect Ratio Width: Width ratio between boxes
     4. Aspect Ratio Height: Height ratio between boxes
-    5. Direction: Directional information from bbox displacement
+    5. Direction Similarity : Directional information from bbox displacement
     6. Similarity: Cosine similarity of appearance features (from ReID models)
     
     These features are fed into the pre-trained logistic regression model to predict
@@ -672,10 +673,10 @@ class LinkingPhase:
       reid_model = self.vehicle_reid
 
     bbox1 = [
-             detected_tracklet.track_list[-1].get('bb_left'),
-             detected_tracklet.track_list[-1].get('bb_top'),
-             detected_tracklet.track_list[-1].get('bb_width'),
-             detected_tracklet.track_list[-1].get('bb_height')
+             untracked_tracklet.track_list[-1].get('bb_left'),
+             untracked_tracklet.track_list[-1].get('bb_top'),
+             untracked_tracklet.track_list[-1].get('bb_width'),
+             untracked_tracklet.track_list[-1].get('bb_height')
             ]
 
     bbox2 = [
@@ -688,15 +689,26 @@ class LinkingPhase:
     appearance_vector1 = extract_appearance_vector_from_frame(self.video_path,untracked_tracklet.track_list[-1].get('frame_number'),reid_model,bbox1)
     appearance_vector2 = extract_appearance_vector_from_frame(self.video_path,detected_tracklet.track_list[0].get('frame_number'), reid_model,bbox2)
 
+  
+
+    dir1 = get_direction(
+      (untracked_tracklet.track_list[-2].get('x_center'),untracked_tracklet.track_list[-2].get('y_center')),
+      (untracked_tracklet.track_list[-1].get('x_center'),untracked_tracklet.track_list[-1].get('y_center'))
+                                    )
+    dir2 = get_direction(
+      (untracked_tracklet.track_list[-1].get('x_center'),untracked_tracklet.track_list[-1].get('y_center')),
+      (detected_tracklet.track_list[0].get('x_center'),detected_tracklet.track_list[0].get('y_center'))
+                                    )
+    
 
     iou = calculate_iou(bbox1,bbox2)
     euclidean_distance = get_euclidean_distance(bbox1,bbox2)
     aspect_ratio_w,aspect_ratio_h = get_bounding_box_ratio(bbox1,bbox2)
-    direction = get_direction(bbox1,bbox2)
-    similarity = cosine(appearance_vector1.flatten(),appearance_vector2.flatten())
+    direction = np.cos(dir2 - dir1)
+    similarity = cosine_similarity(appearance_vector1, appearance_vector2)[0][0]
 
     # Define names in the exact order the model was trained on
-    feature_names = ['iou', 'euclidean_distance', 'aspect_ratio_width', 'aspect_ratio_height', 'direction', 'similarity']
+    feature_names = ['iou', 'euclidean_distance', 'aspect_ratio_width', 'aspect_ratio_height', 'direction_similarity', 'similarity']
     item_data = [[iou, euclidean_distance, aspect_ratio_w, aspect_ratio_h, direction, similarity]]
 
     # Create a DataFrame for the single row
