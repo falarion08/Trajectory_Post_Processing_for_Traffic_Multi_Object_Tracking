@@ -434,10 +434,9 @@ class LinkingPhase:
     """
     LinkingPhase is responsible for reconnecting broken trajectory fragments (tracklets) into complete object trajectories.
 
-    This class implements a sophisticated multi-object tracking post-processing pipeline that addresses
-    common tracking failures such as occlusions, temporary disappearances, and identity switches.
-    It uses a combination of spatial, temporal, and appearance-based features to determine whether
-    two tracklets belong to the same object.
+    This class implements a multi-object tracking post-processing algorithm that links
+    fragmented trajectories using a combination of spatial, temporal, and appearance-based features.
+    It determines whether two tracklets belong to the same object using a logistic regression model.
 
     The linking algorithm processes frames sequentially:
     1. Identifies new tracklets starting in the current frame
@@ -517,7 +516,7 @@ class LinkingPhase:
         self.start_frame = self.track_list[-1].start_frame
         self.end_frame = self.track_list[0].end_frame
 
-    def link_broken_trajectories(self):
+    def link_broken_trajectories(self) -> None:
         """
         Execute the main trajectory linking algorithm across all frames.
 
@@ -594,7 +593,7 @@ class LinkingPhase:
             tracks=self.linked_track_list, csv_filename=self.csv_filename
         )
 
-    def check_new_detections_from_frame(self, frame_ref: int, frame_to_map: set):
+    def check_new_detections_from_frame(self, frame_ref: int, frame_to_map: set) -> list[Track]:
         """
         Extract all tracklets that start in the given frame.
 
@@ -624,7 +623,7 @@ class LinkingPhase:
                 frame_to_map.add(tracklet.track_list[-1].get('frame_number'))
         return detected_tracklets
 
-    def update_tracklet_linking_candidates(self, current_frame: int):
+    def update_tracklet_linking_candidates(self, current_frame: int) -> None:
         """
         Mark unmatched tracklets as finalized if they exceed the lost_track_threshold.
 
@@ -651,7 +650,7 @@ class LinkingPhase:
 
     def link_detections_with_candidates(
         self, current_frame, detected_tracklets: list[Track]
-    ):
+    ) -> None:
 
         """
         Attempt to link broken trajectories by matching detected tracklets with unmatched ones.
@@ -711,7 +710,7 @@ class LinkingPhase:
         tracklet_linking_candidates_to_match: list[int],
         detections_to_match: list[Track],
         match_type: str,
-    ):
+    ) -> None:
 
         """
         Build a link score matrix and use Hungarian algorithm to find optimal tracklet matches.
@@ -819,7 +818,7 @@ class LinkingPhase:
 
     def extract_pairwise_features(
         self, untracked_tracklet: Track, detected_tracklet: Track, matching_type: str
-    ):
+    ) -> list[float]:
         """
         Extract a comprehensive set of features for evaluating tracklet similarity.
 
@@ -902,7 +901,7 @@ class LinkingPhase:
             similarity,
         ]
 
-    def combine_trajectories(self, track1: Track, track2: Track):
+    def combine_trajectories(self, track1: Track, track2: Track) -> Track:
         """
         Merge two tracklets that have been matched together.
 
@@ -924,7 +923,7 @@ class LinkingPhase:
             start_frame=track1.start_frame, end_frame=track2.end_frame, track_list=t1
         )
 
-    def stitch_tracks(self, track_list: list[dict]):
+    def stitch_tracks(self, track_list: list[dict]) -> list[dict]:
         """
         Stitch multiple trajectory points together with interpolated frames in between.
 
@@ -957,7 +956,7 @@ class LinkingPhase:
 
         return final_tracklist
 
-    def interpolate_from_trajectory(self, trajectory_point1: dict, trajectory_point2: dict):
+    def interpolate_from_trajectory(self, trajectory_point1: dict, trajectory_point2: dict) -> list[dict]:
         """
         Generate interpolated bounding box data for frames between two trajectory points.
 
@@ -1025,7 +1024,7 @@ class LinkingPhase:
             
         return interpolated_data
 
-    def smoothen_trajectory(self, track_df:pd.DataFrame, window_size: int = 15):
+    def smoothen_trajectory(self, track_df:pd.DataFrame, window_size: int = 15) -> pd.DataFrame:
         """
         Applies a moving average to the trajectory centers while preserving
         original bounding box dimensions.
@@ -1054,7 +1053,7 @@ class LinkingPhase:
 
         return track_df
 
-    def finalize_tracklist(self, tracks: list[Track], csv_filename: str):
+    def finalize_tracklist(self, tracks: list[Track], csv_filename: str) -> None:
         """
         Convert finalized tracks to DataFrame and save to CSV.
 
@@ -1083,7 +1082,7 @@ class LinkingPhase:
         tracks_df.sort_values(by=["frame_number", "tracker_id"], inplace=True)
         tracks_df.to_csv(csv_filename, index=False)
 
-    def rescore(self, track: Track):
+    def rescore(self, track: Track) -> tuple[str, float]:
         """
         Determine the most confident class for a track by averaging confidence scores.
 
@@ -1098,11 +1097,17 @@ class LinkingPhase:
         """
         tracks = track.track_list
         class_conf_dict = dict()
+        
         total_trajectories = len(track.track_list)
+        
         for t in tracks:
             c = t.get("class_name")
             class_conf_dict[c] = class_conf_dict.get(c, 0) + t.get("confidence")
+            
         for key in class_conf_dict.keys():
             class_conf_dict[key] = class_conf_dict[key] / total_trajectories
+            
+        # Returns the key whose value is the largest in the dictionary.
         max_class = max(class_conf_dict, key=class_conf_dict.get)
+        
         return max_class, round(class_conf_dict[max_class], 4)
