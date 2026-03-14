@@ -7,7 +7,7 @@ from scipy.spatial.distance import euclidean
 
 
 
-def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list):
+def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list,frame_array:np.array=None):
     """
     Extract appearance feature vector for a region of interest from a specific video frame.
     
@@ -164,7 +164,7 @@ def get_bounding_box_ratio(bbox1:list, bbox2:list):
     return [w1/w2, h1/h2]
 
 
-def get_direction(coord1:tuple, coord2:list):
+def get_direction(coord1:tuple, coord2:tuple):
     """
     Compute the directional angle from one bounding box to another.
     
