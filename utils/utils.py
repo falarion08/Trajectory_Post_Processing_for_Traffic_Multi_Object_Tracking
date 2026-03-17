@@ -7,16 +7,15 @@ from scipy.spatial.distance import euclidean
 
 
 
-def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_model: FastReID, bounding_box: list,frame_array:np.array=None):
-    """
-    Extract appearance feature vector for a region of interest from a specific video frame.
-    
+def extract_appearance_vector_from_frame(video_path: str, frame_id: int, reid_model: FastReID, bounding_box: list, frame_array: np.array = None):
+    """Extract appearance feature vector for a region of interest from a specific video frame.
+
     This function uses a pre-trained ReID (Re-Identification) model to compute deep appearance
-    features for a cropped region of a video frame. These features can be used to compare the
-    visual similarity between different detections across frames.
-    
+    features for a cropped region of a video frame. These features are useful for comparing the
+    visual similarity between detections across frames.
+
     Args:
-        video_path (str): Path to the video file to extract frame from
+        video_path (str): Path to the video file to extract frame from.
         frame_id (int): Frame number to extract (1-based indexing, where frame 1 is the first frame).
                        Will be converted to 0-based indexing internally.
         reid_model (FastReID): Pre-trained ReID model instance (e.g., from FastReID class).
@@ -26,32 +25,25 @@ def extract_appearance_vector_from_frame(video_path:str, frame_id:int, reid_mode
                             - y: top coordinate of the box
                             - width: width of the box
                             - height: height of the box
-    
+        frame_array (np.ndarray, optional): Unused parameter retained for backwards compatibility.
+
     Returns:
         np.ndarray: Feature vector (embedding) computed by the ReID model for the cropped region.
                    Shape is typically (1, 256) or similar depending on the model architecture.
-    
+
     Raises:
         FileNotFoundError: If the video file does not exist at video_path
         ValueError: If the specified frame_id cannot be read from the video
-    
-    Example:
-        >>> features = extract_appearance_vector_from_frame(
-        ...     video_path='video.mp4',
-        ...     frame_id=100,
-        ...     reid_model=person_reid_model,
-        ...     bounding_box=[50, 100, 200, 300]
-        ... )
     """
     frame_id = frame_id - 1
-    
+
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
-    
+
     else:
         cap = cv2.VideoCapture(video_path)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id - 1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
         ret, frame_array = cap.read()
 
         if ret:
@@ -98,9 +90,6 @@ def calculate_iou(bbox1, bbox2):
               - 1 means complete overlap
               - 0.5 means 50% overlap
     
-    Example:
-        >>> iou = calculate_iou([0, 0, 100, 100], [50, 50, 100, 100])
-        >>> print(iou)  # Output: 0.14285714...
     """
     # Convert (left, top, width, height) to (x1, y1, x2, y2) format
     x1,y1,w1,h1 = bbox1
@@ -164,46 +153,33 @@ def get_bounding_box_ratio(bbox1:list, bbox2:list):
     return [w1/w2, h1/h2]
 
 
-def get_direction(coord1:tuple, coord2:tuple):
-    """
-    Compute the directional angle from one bounding box to another.
-    
-    This function calculates the angle (in radians) of movement from the first bounding box
-    to the second. The direction can indicate whether an object is moving left, right, up, down,
-    or in any diagonal direction. This is useful for predicting object motion patterns and
-    validating trajectory continuity.
-    
+def get_direction(coord1: tuple, coord2: tuple):
+    """Compute the directional angle between two points.
+
+    This function computes the angle (in radians) from `coord1` to `coord2` using a coordinate
+    system where the y-axis points downward (as in image coordinates).
+
+    The angle is computed as ``atan2(dx, dy)`` and has the following interpretation:
+      - 0 radians: movement straight down (positive y direction)
+      - π/2 radians: movement to the right (positive x direction)
+      - -π/2 radians: movement to the left (negative x direction)
+
     Args:
-        bbox1 (list): First bounding box in format [x, y, width, height] (starting position)
-        bbox2 (list): Second bounding box in format [x, y, width, height] (ending position)
-    
+        coord1 (tuple): (x, y) coordinates of the starting point (e.g., center of a bounding box).
+        coord2 (tuple): (x, y) coordinates of the ending point.
+
     Returns:
-        float: Direction angle in radians, computed as atan2(dx, dy) where:
-              - dx = bbox2_x - bbox1_x (horizontal displacement)
-              - dy = bbox2_y - bbox1_y (vertical displacement)
-              - Range: [-π, π]
-              - 0 radians = moving down
-              - π/2 radians = moving right
-              - -π/2 radians = moving left
-    
-    Note:
-        The function uses the center-coordinates (x, y) of each bounding box.
-        The direction is relative to the box's position, not its center.
-    
-    Example:
-        >>> direction = get_direction([0, 0, 100, 100], [100, 100, 100, 100])
-        >>> print(direction)  # Output: angle in radians
+        float: Direction angle in radians.
     """
-    x1,y1 = coord1
-    x2,y2 = coord2
-    
+    x1, y1 = coord1
+    x2, y2 = coord2
+
     dx = x2 - x1
     dy = y2 - y1
 
-    direction = math.atan2(dx,dy)
+    direction = math.atan2(dx, dy)
 
-
-    return direction 
+    return direction
 
 def get_euclidean_distance(bbox1:list, bbox2:list):
     """
@@ -226,12 +202,45 @@ def get_euclidean_distance(bbox1:list, bbox2:list):
         Unlike get_direction() which gives angle, this function gives magnitude of displacement.
         Uses only the top-left corner coordinates (x, y) of the bounding boxes, not centers.
     
-    Example:
-        >>> distance = get_euclidean_distance([0, 0, 100, 100], [30, 40, 100, 100])
-        >>> print(distance)  # Output: 50.0 (sqrt(30^2 + 40^2))
     """
     x1,y1,w1,h1 = bbox1
     x2,y2,w2,h2 = bbox2
 
     return euclidean([x1,y1],[x2,y2])
     
+
+def get_speed(point1: dict, point2: dict):
+    """Estimate the speed between two trajectory points.
+
+    Computes the Euclidean distance between the centers of two detections, then divides
+    by the difference in frame numbers to yield a speed in pixels per frame.
+
+    Args:
+        point1 (dict): First trajectory point containing keys 'frame_number', 'x_center', 'y_center'.
+        point2 (dict): Second trajectory point containing keys 'frame_number', 'x_center', 'y_center'.
+
+    Returns:
+        float: Estimated speed (pixels per frame).
+
+    Raises:
+        ZeroDivisionError: If both points have the same 'frame_number'.
+    """
+
+    frame1 = point1.get("frame_number")
+    frame2 = point2.get("frame_number")
+
+    x1 = point1.get("x_center")
+    y1 = point1.get("y_center")
+
+    x2 = point2.get("x_center")
+    y2 = point2.get("y_center")
+
+    distance = euclidean([x1, y1], [x2, y2])
+
+    return distance / (frame2 - frame1)
+
+
+def sigmoid_transform(t_score):
+    """Apply a sigmoid transformation to normalize a score to (0, 1)."""
+    return 1 / (1 + np.exp(-t_score))
+

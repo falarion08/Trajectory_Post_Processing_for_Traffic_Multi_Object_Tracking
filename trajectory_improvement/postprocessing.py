@@ -8,11 +8,12 @@ from trajectory_improvement.tracklet import Track
 from fastreid.reid import FastReID
 import supervision as sv
 from utils.utils import (
-    extract_appearance_vector_from_frame,
+    get_speed,
     calculate_iou,
     get_euclidean_distance,
     get_bounding_box_ratio,
     get_direction,    
+    sigmoid_transform
 )
 
 class TrajectoryBreakPhase:
@@ -434,9 +435,18 @@ class LinkingPhase:
     """
     LinkingPhase is responsible for reconnecting broken trajectory fragments (tracklets) into complete object trajectories.
 
-    This class implements a multi-object tracking post-processing algorithm that links
-    fragmented trajectories using a combination of spatial, temporal, and appearance-based features.
-    It determines whether two tracklets belong to the same object using a logistic regression model.
+    This class implements a sophisticated multi-object tracking post-processing pipeline that addresses
+    common tracking failures such as occlusions, temporary disappearances, and identity switches.
+    It uses a combination of spatial, temporal, and appearance-based features to determine whether
+    two tracklets belong to the same object.
+
+    Key Features:
+    - **Appearance Matching**: Uses ReID (Re-Identification) models to compare visual features
+    - **Spatial Reasoning**: Considers bounding box IoU, Euclidean distance, and aspect ratio similarity
+    - **Temporal Constraints**: Enforces maximum time gaps for valid connections
+    - **Motion Continuity**: Analyzes direction consistency between tracklets
+    - **Machine Learning**: Employs a trained logistic regression model for link probability prediction
+    - **Optimal Assignment**: Uses Hungarian algorithm for efficient one-to-one matching
 
     The linking algorithm processes frames sequentially:
     1. Identifies new tracklets starting in the current frame
@@ -444,7 +454,7 @@ class LinkingPhase:
     3. Computes pairwise similarity scores using multiple features
     4. Applies optimal assignment to maximize overall matching confidence
     5. Merges successfully matched tracklets
-    6. Finalizes tracklets through trajectory smoothing and linear interpolation for short gaps
+    6. Finalizes tracklets that remain unmatched beyond temporal thresholds
 
     Supports separate handling for different object types (persons vs vehicles) to ensure
     type-consistent matching and prevent cross-category identity transfers.
@@ -458,26 +468,36 @@ class LinkingPhase:
         vehicle_reid_path: str,
         person_reid_path: str,
         lost_track_tresh: int = 1,
-        positive_match_thresh: float = 0.90,
+        positive_match_thresh: float = 0.50,
+        candidate_tracklet_characterization_window = 5,
+        speed_residual_weight = 0.60
     ) -> None:
-        """
-        Initialize the LinkingPhase with all necessary components for trajectory linking.
+        """Initialize the LinkingPhase with all necessary components for trajectory linking.
 
         Args:
-            video_path (str): Path to the input video file used for frame extraction and ReID feature computation
-            log_reg_model (LogisticRegression): Pre-trained logistic regression model for predicting link probabilities
-            track_list (list[Track]): List of Track objects representing broken tracklets to be linked
-            csv_filename (str): Output CSV filename for the final linked trajectories
-            vehicle_reid_path (str): Path to the ONNX model file for vehicle re-identification
-            person_reid_path (str): Path to the ONNX model file for person re-identification
-            video_fps (int): Frames per second of the input video (used for temporal threshold calculations)
-            lost_track_tresh (int, optional): Maximum time in seconds a tracklet can remain unmatched before being finalized (default: 1)
-            positive_match_thresh (float, optional): Minimum confidence threshold [0-1] for accepting a tracklet link (default: 0.90)
+            video_path (str): Path to the input video file used for frame extraction and ReID feature computation.
+            log_reg_model (LogisticRegression): Pre-trained logistic regression model for predicting link probabilities.
+            track_list (list[Track]): List of Track objects representing broken tracklets to be linked.
+                Each Track is expected to include:
+                - start_frame (int)
+                - end_frame (int)
+                - track_list (list[dict]) containing per-frame detection info (e.g., frame_number, bb_* keys, x_center, y_center).
+            csv_filename (str): Output CSV filename for the final linked trajectories.
+            vehicle_reid_path (str): Path to the ONNX model file for vehicle re-identification.
+            person_reid_path (str): Path to the ONNX model file for person re-identification.
+            lost_track_tresh (float, optional): Maximum time in seconds a tracklet can remain unmatched before being finalized (default: 1).
+                Internally this is converted to frame counts using the input video's FPS.
+            positive_match_thresh (float, optional): Minimum confidence threshold [0-1] for accepting a tracklet link (default: 0.50).
+            candidate_tracklet_characterization_window (int, optional): Number of previous frames used when characterizing a candidate tracklet for matching (default: 5).
+            speed_residual_weight (float, optional): Weight (0-1) applied to the speed residual feature when scoring potential matches (default: 0.60).
 
         Raises:
-            Exception: If the logistic regression model is not loaded correctly or is not a LogisticRegression instance
-            Exception: If the track_list is empty
+            Exception: If the logistic regression model is not loaded correctly or is not a LogisticRegression instance.
+            Exception: If the track_list is empty.
         """
+
+        self.candidate_tracklet_characterization_window = candidate_tracklet_characterization_window # How much previous frames to watch
+        self.speed_residual_weight = speed_residual_weight  # How much weight the speed_residual_score contributes
 
         self.model = log_reg_model
         self.frame_dict = dict() # Stores frames in memory for faster access
@@ -495,7 +515,7 @@ class LinkingPhase:
         self.video_fps = video_info.fps
         self.lost_track_tresh = (
             lost_track_tresh * self.video_fps
-        )  # Maximum number of seconds a track can remain unmatched
+        )  # Maximum number of seconds to consider a track as unmatched
 
         self.positive_match_thresh = positive_match_thresh
         self.csv_filename = csv_filename
@@ -516,7 +536,7 @@ class LinkingPhase:
         self.start_frame = self.track_list[-1].start_frame
         self.end_frame = self.track_list[0].end_frame
 
-    def link_broken_trajectories(self) -> None:
+    def link_broken_trajectories(self):
         """
         Execute the main trajectory linking algorithm across all frames.
 
@@ -548,9 +568,9 @@ class LinkingPhase:
             if frame_number >= self.start_frame and frame_number <= self.end_frame:
 
 
-                print(
-                    f"Processing Video \n Current frame: {frame_number}. Completion frame: {self.end_frame}."
-                )
+                # print(
+                #     f"Processing Video \n Current frame: {frame_number}. Completion frame: {self.end_frame}."
+                # )
 
                 # Update: Mark old unmatched tracklets as finalized if they exceed the lost_track_threshold
                 self.update_tracklet_linking_candidates(frame_number)
@@ -593,7 +613,7 @@ class LinkingPhase:
             tracks=self.linked_track_list, csv_filename=self.csv_filename
         )
 
-    def check_new_detections_from_frame(self, frame_ref: int, frame_to_map: set) -> list[Track]:
+    def check_new_detections_from_frame(self, frame_ref: int, frame_to_map: set):
         """
         Extract all tracklets that start in the given frame.
 
@@ -613,7 +633,7 @@ class LinkingPhase:
 
             detected_tracklets.append(tracklet)
 
-            
+
             if len(self.tracklet_linking_candidates) == 0 and len(tracklet.track_list) >= 2:
                 #  Only add to memory ideal tracklet candidates
                 frame_to_map.add(tracklet.track_list[0].get('frame_number'))
@@ -623,7 +643,7 @@ class LinkingPhase:
                 frame_to_map.add(tracklet.track_list[-1].get('frame_number'))
         return detected_tracklets
 
-    def update_tracklet_linking_candidates(self, current_frame: int) -> None:
+    def update_tracklet_linking_candidates(self, current_frame: int):
         """
         Mark unmatched tracklets as finalized if they exceed the lost_track_threshold.
 
@@ -636,21 +656,21 @@ class LinkingPhase:
         """
         linked_trajectories = [] # Store final trahectory
         updated_tracklet_linking_candidates = [] # Store the tracklet candidate matches for the the current frame
-        
+
         if len(self.tracklet_linking_candidates) > 0:
             for tracklet in self.tracklet_linking_candidates:
-        
+
                 if current_frame - tracklet.end_frame > self.lost_track_tresh:
                     linked_trajectories.append(tracklet) # Tracklet are considered unmatched for n number of frames
                 else:
                     updated_tracklet_linking_candidates.append(tracklet)
-        
+
         self.linked_track_list.extend(linked_trajectories)
         self.tracklet_linking_candidates = updated_tracklet_linking_candidates
 
     def link_detections_with_candidates(
         self, current_frame, detected_tracklets: list[Track]
-    ) -> None:
+    ):
 
         """
         Attempt to link broken trajectories by matching detected tracklets with unmatched ones.
@@ -710,7 +730,7 @@ class LinkingPhase:
         tracklet_linking_candidates_to_match: list[int],
         detections_to_match: list[Track],
         match_type: str,
-    ) -> None:
+    ):
 
         """
         Build a link score matrix and use Hungarian algorithm to find optimal tracklet matches.
@@ -730,8 +750,8 @@ class LinkingPhase:
         """
 
         filtered_candidates = []
-        
-        # Feature names the logistic regression model was trained on 
+
+        # Feature names the logistic regression model was trained on
         feature_names = [
             "iou",
             "euclidean_distance",
@@ -773,26 +793,36 @@ class LinkingPhase:
                     )
                     features_batch.append(features)
                     indices.append((i, j))
+
+                    self.compute_speed_residual(self.tracklet_linking_candidates[
+                            tracklet_linking_candidates_to_match[i]
+                        ],detections_to_match[j])
+
             if features_batch:
 
                 df_batch = pd.DataFrame(features_batch, columns=feature_names)
 
                 probabilities = self.model.predict_proba(df_batch)[:, 1]
 
+                # Compute error rate
                 for idx, (i, j) in enumerate(indices):
-                    link_score_matrix[i][j] = 1 - probabilities[idx]
+                    link_score_matrix[i][j] = 1 - (probabilities[idx] - (self.speed_residual_weight * self.compute_speed_residual(self.tracklet_linking_candidates[
+                            tracklet_linking_candidates_to_match[i]
+                        ],detections_to_match[j])))
 
             row_ind, col_ind = linear_sum_assignment(link_score_matrix)
-            
+
             # Unliked candidates will be added to tracklet canddiates for matching in future frames
             for j in range(len(detections_to_match)):
                 if j not in col_ind:
                     if len(detections_to_match[j].track_list) >= 2:
                         self.tracklet_linking_candidates.append(detections_to_match[j])
 
+          # convert error rate back to probability score
             for i in range(len(row_ind)):
                 probability_score = 1 - link_score_matrix[row_ind[i], col_ind[i]]
-                
+
+
                 # Connect to tracklets if their similarity scores exceeds the positives match threshold
                 if probability_score >= self.positive_match_thresh:
 
@@ -818,7 +848,7 @@ class LinkingPhase:
 
     def extract_pairwise_features(
         self, untracked_tracklet: Track, detected_tracklet: Track, matching_type: str
-    ) -> list[float]:
+    ):
         """
         Extract a comprehensive set of features for evaluating tracklet similarity.
 
@@ -901,7 +931,60 @@ class LinkingPhase:
             similarity,
         ]
 
-    def combine_trajectories(self, track1: Track, track2: Track) -> Track:
+    def compute_speed_residual(self, candidate_tracklet:Track, detected_tracklet: Track) -> float:
+        """
+        Characterize the behaviour of an object by computing it's speed for the last n frames.
+        This serves as a penalty score for the logistic regression model that have high similarity but large instantaneous displacement
+        when linking two tracklet together.
+
+        Computes the penalty score by using the t-score. A large displacement means it deviates largely away from the expected speed.
+        It normalizes the data by mapping it into a sigmoid transform function between 0 to 0.5. Clips the data to 0 to 0.5.
+        A Value of 0 means it is near the mean, and a value of 0.5 means it is far away from the mean.
+
+
+        Args:
+            candidate_tracklet : A candidate tracklet that is a possible match with the detected tracklet.
+            detected_tracklet : A detected tracklet in the current frame iteration to be linked.
+
+        Returns the penalty score. [0.0-5.0]
+        """
+
+        # Copy the last n frames from the candidate tracklet
+        previous_frames = candidate_tracklet.track_list[-1 - self.candidate_tracklet_characterization_window:]
+        speed_list = []
+
+        curr_index = 0
+        scaled_result = 0
+
+        candidate_connection_speed = get_speed(previous_frames[-1], detected_tracklet.track_list[0])
+
+        while curr_index + 1 < len(previous_frames):
+
+          p1 = previous_frames[curr_index]
+          p2 = previous_frames[curr_index + 1]
+
+          speed = get_speed(p1,p2)
+          speed_list.append(speed)
+
+          curr_index = curr_index + 1
+
+        # Compute residual for a single datapoint 
+        if len(speed_list) == 1 :
+          scaled_result = sigmoid_transform(abs(candidate_connection_speed-speed_list[0])) 
+
+
+        # Characterize the behavior of a trajectory by computing their average speed for the last n frames
+        else:
+          avg_speed = np.mean(speed_list)
+        # # Calculate sample standard deviation
+          sample_std = np.std(speed_list, ddof=1)
+          scaled_result = sigmoid_transform(abs(candidate_connection_speed-avg_speed) / sample_std)
+          scaled_result = round(scaled_result,4)
+
+        # Clips the result between 0 to 0.5 
+        return round(scaled_result - 0.5,4)
+
+    def combine_trajectories(self, track1: Track, track2: Track):
         """
         Merge two tracklets that have been matched together.
 
@@ -923,7 +1006,7 @@ class LinkingPhase:
             start_frame=track1.start_frame, end_frame=track2.end_frame, track_list=t1
         )
 
-    def stitch_tracks(self, track_list: list[dict]) -> list[dict]:
+    def stitch_tracks(self, track_list: list[dict]):
         """
         Stitch multiple trajectory points together with interpolated frames in between.
 
@@ -956,7 +1039,7 @@ class LinkingPhase:
 
         return final_tracklist
 
-    def interpolate_from_trajectory(self, trajectory_point1: dict, trajectory_point2: dict) -> list[dict]:
+    def interpolate_from_trajectory(self, trajectory_point1: dict, trajectory_point2: dict):
         """
         Generate interpolated bounding box data for frames between two trajectory points.
 
@@ -991,7 +1074,7 @@ class LinkingPhase:
 
         frame_list = np.arange(x1 + 1,x2) # Interpolate for frames between x1 and x2
 
-        # Corrected: Use np.interp for interpolation
+
         bb_left_list = np.interp(frame_list, xp, fp_bb_left)
         bb_top_list = np.interp(frame_list, xp, fp_bb_top)
         bb_w_list = np.interp(frame_list, xp, fp_w)
@@ -1021,10 +1104,10 @@ class LinkingPhase:
             'y':-1,
             'z':-1
             })
-            
+
         return interpolated_data
 
-    def smoothen_trajectory(self, track_df:pd.DataFrame, window_size: int = 15) -> pd.DataFrame:
+    def smoothen_trajectory(self, track_df:pd.DataFrame, window_size: int = 15):
         """
         Applies a moving average to the trajectory centers while preserving
         original bounding box dimensions.
@@ -1053,7 +1136,7 @@ class LinkingPhase:
 
         return track_df
 
-    def finalize_tracklist(self, tracks: list[Track], csv_filename: str) -> None:
+    def finalize_tracklist(self, tracks: list[Track], csv_filename: str):
         """
         Convert finalized tracks to DataFrame and save to CSV.
 
@@ -1082,7 +1165,7 @@ class LinkingPhase:
         tracks_df.sort_values(by=["frame_number", "tracker_id"], inplace=True)
         tracks_df.to_csv(csv_filename, index=False)
 
-    def rescore(self, track: Track) -> tuple[str, float]:
+    def rescore(self, track: Track):
         """
         Determine the most confident class for a track by averaging confidence scores.
 
@@ -1097,17 +1180,11 @@ class LinkingPhase:
         """
         tracks = track.track_list
         class_conf_dict = dict()
-        
         total_trajectories = len(track.track_list)
-        
         for t in tracks:
             c = t.get("class_name")
             class_conf_dict[c] = class_conf_dict.get(c, 0) + t.get("confidence")
-            
         for key in class_conf_dict.keys():
             class_conf_dict[key] = class_conf_dict[key] / total_trajectories
-            
-        # Returns the key whose value is the largest in the dictionary.
         max_class = max(class_conf_dict, key=class_conf_dict.get)
-        
         return max_class, round(class_conf_dict[max_class], 4)
