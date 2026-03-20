@@ -589,8 +589,7 @@ class LinkingPhase:
                     indices.append((i, j))
             if features_batch:
                 df_batch = pd.DataFrame(features_batch, columns=feature_names)
-                df_batch_scaled = self.scaler.fit_transform(df_batch)
-                probabilities = self.model.predict_proba(df_batch_scaled)[:, 1]
+                probabilities = self.model.predict_proba(df_batch)[:, 1]
                 for idx, (i, j) in enumerate(indices):
                     link_score_matrix[i][j] = 1 - (probabilities[idx] - (self.speed_residual_weight * self.compute_speed_residual(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j])))
             row_ind, col_ind = linear_sum_assignment(link_score_matrix)
