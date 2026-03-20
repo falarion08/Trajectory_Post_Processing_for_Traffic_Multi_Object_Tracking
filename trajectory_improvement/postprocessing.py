@@ -506,6 +506,7 @@ class LinkingPhase:
         for i, frame in enumerate(generator):
             frame_number = i + 1
             if frame_number >= self.start_frame and frame_number <= self.end_frame:
+                print(f'Processing Frame : {frame_number}. End Frame : {self.end_frame}')
                 self.update_tracklet_linking_candidates(frame_number)
                 detected_tracklets_from_frame = self.check_new_detections_from_frame(frame_number, frame_to_map)
                 if frame_number in frame_to_map:
