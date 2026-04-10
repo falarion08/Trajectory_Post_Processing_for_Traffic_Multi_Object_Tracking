@@ -6,7 +6,6 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 from trajectory_improvement.tracklet import Track
-from fastreid.reid import FastReID
 import supervision as sv
 from utils.utils import (
     get_speed,
@@ -163,7 +162,7 @@ class TrajectoryBreakPhase:
 
             kalman_filter = KalmanFilter2D(
                 measurement_period=1 / self.video_fps,
-                measurement_error_std=3,
+                measurement_error_std=10,
                 acceleration_std=0.2,
                 measured_trajectory_points=trajectory_list,
             )
@@ -442,7 +441,6 @@ class LinkingPhase:
     two tracklets belong to the same object.
 
     Key Features:
-    - **Appearance Matching**: Uses ReID (Re-Identification) models to compare visual features
     - **Spatial Reasoning**: Considers bounding box IoU, Euclidean distance, and aspect ratio similarity
     - **Temporal Constraints**: Enforces maximum time gaps for valid connections
     - **Motion Continuity**: Analyzes direction consistency between tracklets
@@ -462,12 +460,9 @@ class LinkingPhase:
     """
     def __init__(
         self, 
-        video_path: str, 
         log_reg_model: LogisticRegression, 
         track_list: list[Track], 
         csv_filename: str, 
-        vehicle_reid_path: str, 
-        person_reid_path: str, 
         lost_track_tresh: int = 1,
         positive_match_thresh: float = 0.50,
         candidate_tracklet_characterization_window = 5,
@@ -481,16 +476,11 @@ class LinkingPhase:
         self.linked_track_list = []
         self.scaler = StandardScaler()
         self.tracklet_linking_candidates = []
-        self.video_path = video_path
-        video_info = sv.VideoInfo.from_video_path(video_path=self.video_path)
-        self.frame_width = video_info.width
-        self.frame_height = video_info.height
-        self.video_fps = video_info.fps
+
         self.lost_track_tresh = lost_track_tresh * self.video_fps
         self.positive_match_thresh = positive_match_thresh
         self.csv_filename = csv_filename
-        self.person_reid = FastReID(onnx_path=person_reid_path, reid_type="person")
-        self.vehicle_reid = FastReID(onnx_path=vehicle_reid_path, reid_type="vehicle")
+
         if not self.model or not isinstance(self.model, LogisticRegression):
             raise Exception("Model not loaded correctly. Check the model path or model type")
         if len(self.track_list) == 0:
@@ -612,11 +602,10 @@ class LinkingPhase:
                     self.tracklet_linking_candidates.append(detection)
 
     def extract_pairwise_features(self, untracked_tracklet: Track, detected_tracklet: Track, matching_type: str):
-        reid_model = self.person_reid if matching_type == "person" else self.vehicle_reid
+
         bbox1 = [untracked_tracklet.track_list[-1].get("bb_left"), untracked_tracklet.track_list[-1].get("bb_top"), untracked_tracklet.track_list[-1].get("bb_width"), untracked_tracklet.track_list[-1].get("bb_height")]
         bbox2 = [detected_tracklet.track_list[0].get("bb_left"), detected_tracklet.track_list[0].get("bb_top"), detected_tracklet.track_list[0].get("bb_width"), detected_tracklet.track_list[0].get("bb_height")]
-        appearance_vector1 = reid_model.run_inference_on_frame(self.frame_dict[untracked_tracklet.track_list[-1].get("frame_number")])
-        appearance_vector2 = reid_model.run_inference_on_frame(self.frame_dict[detected_tracklet.track_list[0].get("frame_number")])
+        
         if len(untracked_tracklet.track_list) >= 2:
             dir1 = get_direction((untracked_tracklet.track_list[-2].get("x_center"), untracked_tracklet.track_list[-2].get("y_center")), (untracked_tracklet.track_list[-1].get("x_center"), untracked_tracklet.track_list[-1].get("y_center")))
         else: dir1 = 0
@@ -625,8 +614,8 @@ class LinkingPhase:
         euclidean_distance = get_euclidean_distance(bbox1, bbox2)
         aspect_ratio_w, aspect_ratio_h = get_bounding_box_ratio(bbox1, bbox2)
         direction = np.cos(dir2 - dir1)
-        similarity = cosine_similarity(appearance_vector1, appearance_vector2)[0][0]
-        return [iou, euclidean_distance, aspect_ratio_w, aspect_ratio_h, direction, similarity]
+
+        return [iou, euclidean_distance, aspect_ratio_w, aspect_ratio_h, direction,]
 
     def compute_speed_residual(self, candidate_tracklet: Track, detected_tracklet: Track) -> float:
         previous_frames = candidate_tracklet.track_list[-1 - self.candidate_tracklet_characterization_window:]
