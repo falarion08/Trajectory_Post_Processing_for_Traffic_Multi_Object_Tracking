@@ -15,165 +15,73 @@ from utils.utils import (
     get_direction,    
     sigmoid_transform
 )
-
 class TrajectoryBreakPhase:
     """
-    TrajectoryBreakPhase is responsible for breaking long object trajectories into smaller tracklets
-    (trajectory segments) at points where sudden motion anomalies are detected.
+    TrajectoryBreakPhase is responsible for breaking trajectories into tracklets based on Mahalanobis distance.
 
-    This class uses a Kalman filter to predict expected object motion and compares actual measurements
-    against predictions using the Mahalanobis distance metric. When a measurement deviates significantly
-    from the prediction (exceeds threshold), the trajectory is broken at that point.
-
-    This segmentation is useful for:
-    - Detecting occlusions or temporary disappearances
-    - Identifying sudden direction/speed changes that might indicate tracking errors
-    - Creating tracklets that can later be linked together in the LinkingPhase
-
-    Typical workflow:
-    1. Load MOT (Multi-Object Tracking) format CSV file
-    2. For each unique tracked object, extract trajectory
-    3. Run Kalman filter to compute Mahalanobis distances for each frame
-    4. Split trajectory into segments at break points (high Mahalanobis distance)
-    5. Return list of Track objects representing the broken tracklets
+    This class uses Kalman filtering to detect anomalies in object trajectories and splits them into smaller tracklets
+    when the distance exceeds a threshold, indicating potential occlusions or tracking errors.
     """
-
-    def __init__(
-        self,
-        input_csv_filename: str,
-        video_fps: int,
-        mahalanobis_distance_thresh: float = 1.9,
-    ) -> None:
+    def __init__(self, input_csv_filename: str, video_fps: int, mahalanobis_distance_thresh: float = 5.99) -> None:
         """
-        Initialize the TrajectoryBreakPhase with MOT data.
+        Initialize the TrajectoryBreakPhase with input data and parameters.
 
         Args:
-            input_csv_filename (str): Path to the MOT format CSV file with tracking data
-            video_fps (int): Frames per second of the video (used to compute measurement period for Kalman filter)
-            mahalanobis_distance_thresh (float): Threshold for breaking trajectories (default: 1.9).
-                                              When Mahalanobis distance exceeds this, a break is detected.
+            input_csv_filename (str): Path to the CSV file containing MOT data.
+            video_fps (int): Frames per second of the video.
+            mahalanobis_distance_thresh (float): Threshold for Mahalanobis distance to break trajectories.
         """
         self.mot_df = pd.read_csv(input_csv_filename)
         self.video_fps = video_fps
         self.thresh = mahalanobis_distance_thresh
 
-    def process_trajectory(
-        self, filtered_track: pd.DataFrame, distance_list: list[int]
-    ):
+    def process_trajectory(self, filtered_track: pd.DataFrame, distance_list: list[float]):
         """
-        Split a trajectory into tracklets at points where Mahalanobis distance exceeds threshold.
-
-        Algorithm:
-        1. Iterate through each measurement and its corresponding Mahalanobis distance
-        2. When distance >= threshold, mark as break point
-        3. Extract segment from previous break point to current break point
-        4. Create a Track object for each non-empty segment
-        5. Return list of all tracklets
+        Process a filtered track and split it into tracklets based on distance thresholds.
 
         Args:
-            filtered_track (pd.DataFrame): DataFrame containing all detections for a single track ID,
-                                          sorted by frame_number. Must include columns: frame_number,
-                                          x_center, y_center, and other detection attributes.
-            distance_list (list[int]): List of Mahalanobis distances computed by Kalman filter.
-                                      Length should match filtered_track rows.
+            filtered_track (pd.DataFrame): DataFrame containing track data for a single tracker_id.
+            distance_list (list[float]): List of Mahalanobis distances corresponding to each point.
 
         Returns:
-            list[Track]: List of Track objects representing trajectory segments (tracklets)
+            list[Track]: List of Track objects representing the broken tracklets.
         """
-        filtered_track = filtered_track.reset_index(
-            drop=True
-        )  # Ensure contiguous 0-based index and drop old index
+        filtered_track = filtered_track.reset_index(drop=True)
         tracklet_list = []
         start_index_copy = 0
-
-        # Iterate through the distances and corresponding track points.
         for i in range(len(distance_list)):
-
-            # A break is detected if the current point's Mahalanobis distance is above threshold
             if distance_list[i] >= self.thresh:
-
-                # slice from start_index_copy up to i (exclusive)
                 tracklet_segment = filtered_track.iloc[start_index_copy:i]
-
                 if not tracklet_segment.empty:
                     tracklet_records = tracklet_segment.to_dict(orient="records")
-                    frame_start = tracklet_records[0]["frame_number"]
-                    frame_end = tracklet_records[-1]["frame_number"]
-
-                    tracklet = Track(
-                        start_frame=frame_start,
-                        end_frame=frame_end,
-                        track_list=tracklet_records,
-                    )
+                    tracklet = Track(start_frame=tracklet_records[0]["frame_number"], end_frame=tracklet_records[-1]["frame_number"], track_list=tracklet_records)
                     tracklet_list.append(tracklet)
-
-                # The new segment starts from the current point 'i'
                 start_index_copy = i
-
-        # After the loop, add the last tracklet segment if it exists
-        # This segment runs from the last 'start_index_copy' to the very end of the filtered_track
-        tracklet_segment = filtered_track.iloc[start_index_copy : len(filtered_track)]
-
+        tracklet_segment = filtered_track.iloc[start_index_copy:]
         if not tracklet_segment.empty:
             tracklet_records = tracklet_segment.to_dict(orient="records")
-            frame_start = tracklet_records[0]["frame_number"]
-            frame_end = tracklet_records[-1]["frame_number"]
-
-            tracklet = Track(
-                start_frame=frame_start,
-                end_frame=frame_end,
-                track_list=tracklet_records,
-            )
+            tracklet = Track(start_frame=tracklet_records[0]["frame_number"], end_frame=tracklet_records[-1]["frame_number"], track_list=tracklet_records)
             tracklet_list.append(tracklet)
-
         return tracklet_list
 
     def create_trackelts(self):
         """
-        Main method that processes all trajectories from the MOT DataFrame and breaks them into tracklets.
+        Create tracklets by processing all tracks in the MOT data.
 
-        Process:
-        1. Extract all unique tracker IDs from the input MOT data
-        2. For each tracker ID:
-          a. Filter detections for that specific ID
-          b. Extract trajectory coordinates (frame_number, x_center, y_center)
-          c. Initialize Kalman filter with trajectory
-          d. Compute Mahalanobis distances
-          e. Break trajectory into segments at anomaly points
-        3. Combine all tracklets from all tracking IDs
+        Applies Kalman filtering to each unique tracker_id and breaks trajectories into tracklets.
 
         Returns:
-            list[Track]: Complete list of broken tracklets from all objects in the video
+            list[Track]: List of all broken tracklets from all tracks.
         """
-        # Get all unique ID in present from the output
         track_id_list = self.mot_df["tracker_id"].unique()
         broken_track_list = []
-
         for track_id in track_id_list:
-
-            filtered_track = (
-                self.mot_df[self.mot_df["tracker_id"] == track_id]
-                .sort_values(by="frame_number")
-                .copy()
-            )
-            trajectory_list = filtered_track[
-                ["frame_number", "x_center", "y_center"]
-            ].values.tolist()
-
-            kalman_filter = KalmanFilter2D(
-                measurement_period=1 / self.video_fps,
-                measurement_error_std=10,
-                acceleration_std=0.2,
-                measured_trajectory_points=trajectory_list,
-            )
-
-            computed_distances = kalman_filter.run_kalman_filter()
-
+            filtered_track = self.mot_df[self.mot_df["tracker_id"] == track_id].sort_values(by="frame_number").copy()
+            trajectory_list = filtered_track[["frame_number", "x_center", "y_center"]].values.tolist()
+            kalman_filter = KalmanFilter2D(measurement_period=1/self.video_fps, measurement_error_std=10, acceleration_std=1.5, measured_trajectory_points=trajectory_list)
+            computed_distances, _ = kalman_filter.run_kalman_filter()
             tracklet_list = self.process_trajectory(filtered_track, computed_distances)
-
-            if tracklet_list:
-                broken_track_list.extend(tracklet_list)
-
+            if tracklet_list: broken_track_list.extend(tracklet_list)
         return broken_track_list
 
 
@@ -430,290 +338,357 @@ class KalmanFilter2D:
             current_frame = current_frame + 1
 
         return computed_distances
-
 class LinkingPhase:
     """
     LinkingPhase is responsible for reconnecting broken trajectory fragments (tracklets) into complete object trajectories.
-
-    This class implements a sophisticated multi-object tracking post-processing pipeline that addresses
-    common tracking failures such as occlusions, temporary disappearances, and identity switches.
-    It uses a combination of spatial, temporal, and appearance-based features to determine whether
-    two tracklets belong to the same object.
-
-    Key Features:
-    - **Spatial Reasoning**: Considers bounding box IoU, Euclidean distance, and aspect ratio similarity
-    - **Temporal Constraints**: Enforces maximum time gaps for valid connections
-    - **Motion Continuity**: Analyzes direction consistency between tracklets
-    - **Machine Learning**: Employs a trained logistic regression model for link probability prediction
-    - **Optimal Assignment**: Uses Hungarian algorithm for efficient one-to-one matching
-
-    The linking algorithm processes frames sequentially:
-    1. Identifies new tracklets starting in the current frame
-    2. Matches them against recently active unmatched tracklets
-    3. Computes pairwise similarity scores using multiple features
-    4. Applies optimal assignment to maximize overall matching confidence
-    5. Merges successfully matched tracklets
-    6. Finalizes tracklets that remain unmatched beyond temporal thresholds
-
-    Supports separate handling for different object types (persons vs vehicles) to ensure
-    type-consistent matching and prevent cross-category identity transfers.
     """
     def __init__(
-        self, 
-        log_reg_model: LogisticRegression, 
-        track_list: list[Track], 
-        csv_filename: str, 
-        lost_track_tresh: int = 1,
+        self,
+        log_reg_model: LogisticRegression,
+        track_list: list[Track],
+        csv_filename: str,
+        input_csv_filename: str,
+        lost_track_tresh: int = 30,
         positive_match_thresh: float = 0.50,
         candidate_tracklet_characterization_window = 5,
         speed_residual_weight = 0.60
     ) -> None:
+
         self.candidate_tracklet_characterization_window = candidate_tracklet_characterization_window
         self.speed_residual_weight = speed_residual_weight
         self.model = log_reg_model
-        self.frame_dict = dict()
-        self.track_list = track_list.copy()
-        self.linked_track_list = []
-        self.scaler = StandardScaler()
-        self.tracklet_linking_candidates = []
 
-        self.lost_track_tresh = lost_track_tresh * self.video_fps
+        self.original_track_list = track_list.copy() # Keep a master copy
+        self.track_list = []
+        self.linked_track_list = []
+        self.tracklet_linking_candidates = []
+        self.lost_track_tresh = lost_track_tresh
         self.positive_match_thresh = positive_match_thresh
         self.csv_filename = csv_filename
+        self.input_csv_filename = input_csv_filename
 
         if not self.model or not isinstance(self.model, LogisticRegression):
             raise Exception("Model not loaded correctly. Check the model path or model type")
-        if len(self.track_list) == 0:
+        if len(self.original_track_list) == 0:
             print("No items to process")
             return
-        self.track_list.sort(key=lambda x: x.start_frame, reverse=True)
-        self.start_frame = self.track_list[-1].start_frame
-        self.end_frame = self.track_list[0].end_frame
+
+        self.original_track_list.sort(key=lambda x: x.start_frame, reverse=True)
+        self.start_frame = self.original_track_list[-1].start_frame
+        self.end_frame = self.original_track_list[0].end_frame
+
+    def run_post_process(self):
+        """
+        Run the post-processing pipeline for linking tracklets into complete trajectories.
+
+        Processes tracks by class, links broken trajectories, and finalizes the output.
+        """
+        input_df = pd.read_csv(self.input_csv_filename)
+        unique_classes = input_df['class_name'].unique().tolist()
+
+        all_final_tracks = []
+
+        for object_class in unique_classes:
+
+            # Filter tracks belonging to the current class using rescored class name
+            self.track_list = [t for t in self.original_track_list if self.rescore(t)[0] == object_class]
+
+            if not self.track_list:
+                continue
+
+            self.linked_track_list = []
+            self.tracklet_linking_candidates = []
+
+            # Re-sort for the processing logic
+            self.track_list.sort(key=lambda x: x.start_frame, reverse=True)
+
+            self.link_broken_trajectories()
+            all_final_tracks.extend(self.linked_track_list)
+
+        self.finalize_tracklist(tracks=all_final_tracks, csv_filename=self.csv_filename)
 
     def link_broken_trajectories(self):
-        generator = sv.get_video_frames_generator(self.video_path)
-        frame_to_map = set()
-        for i, frame in enumerate(generator):
-            frame_number = i + 1
-            if frame_number >= self.start_frame and frame_number <= self.end_frame:
-                print(f'Processing Frame : {frame_number}. End Frame : {self.end_frame}')
-                self.update_tracklet_linking_candidates(frame_number)
-                detected_tracklets_from_frame = self.check_new_detections_from_frame(frame_number, frame_to_map)
-                if frame_number in frame_to_map:
-                    self.frame_dict[frame_number] = frame
-                if len(detected_tracklets_from_frame) > 0:
-                    if len(self.tracklet_linking_candidates) > 0:
-                        self.link_detections_with_candidates(frame_number, detected_tracklets_from_frame)
-                    else:
-                        for detected_tracklet in detected_tracklets_from_frame:
-                            if len(detected_tracklet.track_list) >= 2:
-                                self.tracklet_linking_candidates.append(detected_tracklet)
-                                frame_to_map.add(detected_tracklet.track_list[-1].get('frame_number'))
-        self.linked_track_list.extend(self.tracklet_linking_candidates)
-        self.finalize_tracklist(tracks=self.linked_track_list, csv_filename=self.csv_filename)
+        """
+        Link broken trajectories by processing frames sequentially.
 
-    def check_new_detections_from_frame(self, frame_ref: int, frame_to_map: set):
+        Iterates through frames, updates candidates, checks for new detections, and links them.
+        """
+        frame_number = self.start_frame
+        while frame_number <= self.end_frame and len(self.track_list) > 0:
+            self.update_tracklet_linking_candidates(frame_number)
+            detected_tracklets_from_frame = self.check_new_detections_from_frame(frame_number)
+
+            if len(detected_tracklets_from_frame) > 0:
+                if len(self.tracklet_linking_candidates) > 0:
+                    self.link_detections_with_candidates(frame_number, detected_tracklets_from_frame)
+                else:
+                    for detected_tracklet in detected_tracklets_from_frame:
+                        if len(detected_tracklet.track_list) >= 2:
+                            self.tracklet_linking_candidates.append(detected_tracklet)
+                        else:
+                            self.linked_track_list.append(detected_tracklet)
+            frame_number += 1
+
+        self.linked_track_list.extend(self.tracklet_linking_candidates)
+
+    def check_new_detections_from_frame(self, frame_ref: int):
+        """
+        Check for new tracklet detections starting at the given frame.
+
+        Args:
+            frame_ref (int): The frame number to check.
+
+        Returns:
+            list[Track]: List of tracklets starting at this frame.
+        """
         detected_tracklets = []
         while len(self.track_list) > 0 and self.track_list[-1].start_frame == frame_ref:
             tracklet = self.track_list.pop()
             detected_tracklets.append(tracklet)
-            frame_to_map.add(tracklet.track_list[0].get('frame_number'))
-            frame_to_map.add(tracklet.track_list[-1].get('frame_number'))
         return detected_tracklets
 
     def update_tracklet_linking_candidates(self, current_frame: int):
+        """
+        Update the list of tracklet linking candidates by removing lost tracks.
+
+        Args:
+            current_frame (int): The current frame number.
+        """
         linked_trajectories = []
         updated_tracklet_linking_candidates = []
-        if len(self.tracklet_linking_candidates) > 0:
-            for tracklet in self.tracklet_linking_candidates:
-                if current_frame - tracklet.end_frame > self.lost_track_tresh:
-                    linked_trajectories.append(tracklet)
-                else:
-                    updated_tracklet_linking_candidates.append(tracklet)
+        for tracklet in self.tracklet_linking_candidates:
+            if current_frame - tracklet.end_frame > self.lost_track_tresh:
+                linked_trajectories.append(tracklet)
+            else:
+                updated_tracklet_linking_candidates.append(tracklet)
         self.linked_track_list.extend(linked_trajectories)
         self.tracklet_linking_candidates = updated_tracklet_linking_candidates
 
     def link_detections_with_candidates(self, current_frame, detected_tracklets: list[Track]):
-        untracked_vehicle_tracklets_to_match = []
-        untracked_person_tracklets_to_match = []
-        detected_person_tracklets = []
-        detected_vehicle_tracklets = []
-        for index, tracklet in enumerate(self.tracklet_linking_candidates):
-            if current_frame - tracklet.end_frame <= self.lost_track_tresh and current_frame - tracklet.end_frame > 0:
-                class_name = tracklet.track_list[-1].get("class_name")
-                if class_name == "person":
-                    untracked_person_tracklets_to_match.append(index)
-                else:
-                    untracked_vehicle_tracklets_to_match.append(index)
-        for tracklet in detected_tracklets:
-            class_name = tracklet.track_list[0].get("class_name")
-            if class_name == "person":
-                detected_person_tracklets.append(tracklet)
-            else:
-                detected_vehicle_tracklets.append(tracklet)
-        if len(detected_person_tracklets) > 0:
-            self.calculate_link_score_matrix(untracked_person_tracklets_to_match, detected_person_tracklets, "person")
-        if len(detected_vehicle_tracklets) > 0:
-            self.calculate_link_score_matrix(untracked_vehicle_tracklets_to_match, detected_vehicle_tracklets, "vehicle")
+        """
+        Link detected tracklets with existing candidates.
 
-    def calculate_link_score_matrix(self, tracklet_linking_candidates_to_match: list[int], detections_to_match: list[Track], match_type: str):
-        filtered_candidates = []
-        feature_names = ["iou", "euclidean_distance", "aspect_ratio_width", "aspect_ratio_height", "direction_similarity", "similarity"]
-        for idx in tracklet_linking_candidates_to_match:
-            tracklet = self.tracklet_linking_candidates[idx]
-            class_name = tracklet.track_list[-1].get("class_name")
-            if match_type == "person" and class_name == "person":
-                filtered_candidates.append(idx)
-            elif match_type == "vehicle" and class_name != "person":
-                filtered_candidates.append(idx)
-        tracklet_linking_candidates_to_match = filtered_candidates
-        if len(tracklet_linking_candidates_to_match) > 0 and len(detections_to_match) > 0:
-            x_dim = len(tracklet_linking_candidates_to_match)
-            y_dim = len(detections_to_match)
-            link_score_matrix = np.zeros((x_dim, y_dim))
-            features_batch = []
-            indices = []
-            for i in range(x_dim):
-                for j in range(y_dim):
-                    features = self.extract_pairwise_features(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j], matching_type=match_type)
-                    features_batch.append(features)
-                    indices.append((i, j))
-            if features_batch:
-                df_batch = pd.DataFrame(features_batch, columns=feature_names)
-                probabilities = self.model.predict_proba(df_batch)[:, 1]
-                
-                for idx, (i, j) in enumerate(indices):
-                    link_score_matrix[i][j] = 1 - (probabilities[idx] - (self.speed_residual_weight * self.compute_speed_residual(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j])))
-            row_ind, col_ind = linear_sum_assignment(link_score_matrix)
-            for j in range(len(detections_to_match)):
-                if j not in col_ind:
-                    if len(detections_to_match[j].track_list) >= 2:
-                        self.tracklet_linking_candidates.append(detections_to_match[j])
-            for i in range(len(row_ind)):
-                probability_score = 1 - link_score_matrix[row_ind[i], col_ind[i]]
-                if probability_score >= self.positive_match_thresh:
-                    updated_tracklet = self.combine_trajectories(track1=self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[row_ind[i]]], track2=detections_to_match[col_ind[i]])
-                    self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[row_ind[i]]] = updated_tracklet
-                elif len(detections_to_match[col_ind[i]].track_list) >= 2:
-                    self.tracklet_linking_candidates.append(detections_to_match[col_ind[i]])
-        else:
-            for detection in detections_to_match:
+        Args:
+            current_frame: The current frame number.
+            detected_tracklets (list[Track]): List of newly detected tracklets.
+        """
+        # Since run_post_process already filters by class, we link all candidates in this batch
+        indices_to_match = list(range(len(self.tracklet_linking_candidates)))
+        if indices_to_match:
+            self.calculate_link_score_matrix(indices_to_match, detected_tracklets)
+
+    def calculate_link_score_matrix(self, tracklet_linking_candidates_to_match: list[int], detections_to_match: list[Track]):
+        """
+        Calculate the link score matrix and perform matching using the Hungarian algorithm.
+
+        Args:
+            tracklet_linking_candidates_to_match (list[int]): Indices of candidates to match.
+            detections_to_match (list[Track]): List of detected tracklets to match.
+        """
+        feature_names = ["iou", "euclidean_distance", "aspect_ratio_width", "aspect_ratio_height", "direction_similarity"]
+
+        x_dim = len(tracklet_linking_candidates_to_match)
+        y_dim = len(detections_to_match)
+        link_score_matrix = np.zeros((x_dim, y_dim))
+        features_batch = []
+        indices = []
+
+        for i in range(x_dim):
+            for j in range(y_dim):
+                features = self.extract_pairwise_features(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j])
+                features_batch.append(features)
+                indices.append((i, j))
+
+        if features_batch:
+            df_batch = pd.DataFrame(features_batch, columns=feature_names)
+            probabilities = self.model.predict_proba(df_batch)[:, 1]
+
+            for idx, (i, j) in enumerate(indices):
+                speed_res = self.compute_speed_residual(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j])
+                link_score_matrix[i][j] = 1 - (probabilities[idx] - (self.speed_residual_weight * speed_res))
+
+        row_ind, col_ind = linear_sum_assignment(link_score_matrix)
+
+        matched_detections = set()
+        for i, j in zip(row_ind, col_ind):
+            probability_score = 1 - link_score_matrix[i, j]
+            if probability_score >= self.positive_match_thresh:
+                updated_tracklet = self.combine_trajectories(self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]], detections_to_match[j])
+                self.tracklet_linking_candidates[tracklet_linking_candidates_to_match[i]] = updated_tracklet
+                matched_detections.add(j)
+
+        for j, detection in enumerate(detections_to_match):
+            if j not in matched_detections:
                 if len(detection.track_list) >= 2:
                     self.tracklet_linking_candidates.append(detection)
+                else:
+                    self.linked_track_list.append(detection)
 
-    def extract_pairwise_features(self, untracked_tracklet: Track, detected_tracklet: Track, matching_type: str):
+    def extract_pairwise_features(self, untracked_tracklet: Track, detected_tracklet: Track):
+        """
+        Extract pairwise features between two tracklets for linking.
 
+        Args:
+            untracked_tracklet (Track): The candidate tracklet.
+            detected_tracklet (Track): The detected tracklet.
+
+        Returns:
+            list: List of features [iou, euclidean_distance, aspect_ratio_width, aspect_ratio_height, direction_similarity].
+        """
         bbox1 = [untracked_tracklet.track_list[-1].get("bb_left"), untracked_tracklet.track_list[-1].get("bb_top"), untracked_tracklet.track_list[-1].get("bb_width"), untracked_tracklet.track_list[-1].get("bb_height")]
         bbox2 = [detected_tracklet.track_list[0].get("bb_left"), detected_tracklet.track_list[0].get("bb_top"), detected_tracklet.track_list[0].get("bb_width"), detected_tracklet.track_list[0].get("bb_height")]
-        
+
         if len(untracked_tracklet.track_list) >= 2:
             dir1 = get_direction((untracked_tracklet.track_list[-2].get("x_center"), untracked_tracklet.track_list[-2].get("y_center")), (untracked_tracklet.track_list[-1].get("x_center"), untracked_tracklet.track_list[-1].get("y_center")))
         else: dir1 = 0
         dir2 = get_direction((untracked_tracklet.track_list[-1].get("x_center"), untracked_tracklet.track_list[-1].get("y_center")), (detected_tracklet.track_list[0].get("x_center"), detected_tracklet.track_list[0].get("y_center")))
-        iou = calculate_iou(bbox1, bbox2)
-        euclidean_distance = get_euclidean_distance(bbox1, bbox2)
-        aspect_ratio_w, aspect_ratio_h = get_bounding_box_ratio(bbox1, bbox2)
-        direction = np.cos(dir2 - dir1)
 
-        return [iou, euclidean_distance, aspect_ratio_w, aspect_ratio_h, direction,]
+        return [calculate_iou(bbox1, bbox2), get_euclidean_distance(bbox1, bbox2), *get_bounding_box_ratio(bbox1, bbox2), np.cos(dir2 - dir1)]
 
     def compute_speed_residual(self, candidate_tracklet: Track, detected_tracklet: Track) -> float:
+        """
+        Compute the speed residual between candidate and detected tracklets.
+
+        Args:
+            candidate_tracklet (Track): The candidate tracklet.
+            detected_tracklet (Track): The detected tracklet.
+
+        Returns:
+            float: The speed residual value.
+        """
         previous_frames = candidate_tracklet.track_list[-1 - self.candidate_tracklet_characterization_window:]
-        speed_list = []
-        curr_index = 0
+        # Filter out same-frame transitions in history to avoid division by zero
+        speed_list = [get_speed(previous_frames[i], previous_frames[i+1]) for i in range(len(previous_frames)-1) if previous_frames[i+1].get('frame_number') != previous_frames[i].get('frame_number')]
+
+        # Check if detection starts at the exact same frame as the candidate end
+        if detected_tracklet.track_list[0].get('frame_number') == previous_frames[-1].get('frame_number'):
+            return 1.0 # Return maximum residual penalty for temporal overlap
+
         candidate_connection_speed = get_speed(previous_frames[-1], detected_tracklet.track_list[0])
-        while curr_index + 1 < len(previous_frames):
-            p1 = previous_frames[curr_index]
-            p2 = previous_frames[curr_index + 1]
-            speed = get_speed(p1, p2)
-            speed_list.append(speed)
-            curr_index += 1
-        if len(speed_list) == 1:
-            scaled_result = sigmoid_transform(abs(candidate_connection_speed - speed_list[0]))
-        else:
-            avg_speed = np.mean(speed_list)
-            sample_std = np.std(speed_list, ddof=1) if len(speed_list) > 1 else 1e-6
-            scaled_result = sigmoid_transform(abs(candidate_connection_speed - avg_speed) / (sample_std + 1e-6))
+
+        if not speed_list:
+            return 0.0
+
+        avg_speed = np.mean(speed_list)
+        sample_std = np.std(speed_list, ddof=1) if len(speed_list) > 1 else 1e-6
+        scaled_result = sigmoid_transform(abs(candidate_connection_speed - avg_speed) / (sample_std + 1e-6))
         return round(scaled_result - 0.5, 4)
 
     def combine_trajectories(self, track1: Track, track2: Track):
+        """
+        Combine two tracklets into a single track.
+
+        Args:
+            track1 (Track): The first tracklet.
+            track2 (Track): The second tracklet to be appended.
+
+        Returns:
+            Track: The combined track.
+        """
         t1 = track1.track_list.copy()
-        t2 = track2.track_list.copy()
-        t1.extend(t2)
+        t1.extend(track2.track_list)
         return Track(start_frame=track1.start_frame, end_frame=track2.end_frame, track_list=t1)
 
     def stitch_tracks(self, track_list: list[dict]):
+        """
+        Stitch track points by interpolating missing frames.
+
+        Args:
+            track_list (list[dict]): List of track points.
+
+        Returns:
+            list: The stitched track list with interpolated points.
+        """
         final_tracklist = []
         for i in range(1, len(track_list)):
-            frame1 = track_list[i-1].get('frame_number')
-            frame2 = track_list[i].get('frame_number')
-            if frame2 - frame1 > 1:
-                final_tracklist.append(track_list[i-1])
-                interpolated_data = self.interpolate_from_trajectory(track_list[i-1], track_list[i])
-                final_tracklist.extend(interpolated_data)
-            else:
-                final_tracklist.append(track_list[i-1])
+            final_tracklist.append(track_list[i-1])
+            if track_list[i].get('frame_number') - track_list[i-1].get('frame_number') > 1:
+                final_tracklist.extend(self.interpolate_from_trajectory(track_list[i-1], track_list[i]))
         final_tracklist.append(track_list[-1])
         return final_tracklist
 
-    def interpolate_from_trajectory(self, trajectory_point1: dict, trajectory_point2: dict):
-        interpolated_data = []
-        x1, x2 = trajectory_point1.get('frame_number'), trajectory_point2.get('frame_number')
-        xp = [x1, x2]
-        fp_bb_left = [trajectory_point1.get('bb_left'), trajectory_point2.get('bb_left')]
-        fp_bb_top = [trajectory_point1.get('bb_top'), trajectory_point2.get('bb_top')]
-        fp_w = [trajectory_point1.get('bb_width'), trajectory_point2.get('bb_width')]
-        fp_h = [trajectory_point1.get('bb_height'), trajectory_point2.get('bb_height')]
-        frame_list = np.arange(x1 + 1, x2)
-        bb_left_list = np.interp(frame_list, xp, fp_bb_left)
-        bb_top_list = np.interp(frame_list, xp, fp_bb_top)
-        bb_w_list = np.interp(frame_list, xp, fp_w)
-        bb_h_list = np.interp(frame_list, xp, fp_h)
+    def interpolate_from_trajectory(self, p1: dict, p2: dict):
+        """
+        Interpolate track points between two frames.
+
+        Args:
+            p1 (dict): The first track point.
+            p2 (dict): The second track point.
+
+        Returns:
+            list: List of interpolated track points.
+        """
+        interpolated = []
+        x1, x2 = p1.get('frame_number'), p2.get('frame_number')
+        xp, frame_list = [x1, x2], np.arange(x1 + 1, x2)
+
+        keys = ['bb_left', 'bb_top', 'bb_width', 'bb_height']
+        interp_vals = {k: np.interp(frame_list, xp, [p1.get(k), p2.get(k)]) for k in keys}
+
         midpoint = len(frame_list) // 2
-        for i in range(len(frame_list)):
-            categorical_index = 0 if i < midpoint else 1
-            points = [trajectory_point1, trajectory_point2]
-            interpolated_data.append({
-                "frame_number": frame_list[i],
-                "tracker_id": points[categorical_index].get('tracker_id'),
-                "class_name": points[categorical_index].get('class_name'),
-                "bb_left": bb_left_list[i], "bb_top": bb_top_list[i], "bb_width": bb_w_list[i], "bb_height": bb_h_list[i],
-                "x_center": bb_left_list[i] + (bb_w_list[i] / 2), "y_center": bb_top_list[i] + (bb_h_list[i] / 2),
-                "confidence": points[categorical_index].get('confidence'), "x": -1, "y": -1, "z": -1
+        for i, f in enumerate(frame_list):
+            ref = p1 if i < midpoint else p2
+            interpolated.append({
+                "frame_number": f, "tracker_id": ref.get('tracker_id'), "class_name": ref.get('class_name'),
+                **{k: interp_vals[k][i] for k in keys},
+                "x_center": interp_vals['bb_left'][i] + interp_vals['bb_width'][i]/2,
+                "y_center": interp_vals['bb_top'][i] + interp_vals['bb_height'][i]/2,
+                "confidence": ref.get('confidence'), "x": -1, "y": -1, "z": -1
             })
-        return interpolated_data
+        return interpolated
 
     def smoothen_trajectory(self, track_df: pd.DataFrame, window_size: int = 15):
+        """
+        Smooth the trajectory using rolling mean.
+
+        Args:
+            track_df (pd.DataFrame): The track DataFrame.
+            window_size (int): The window size for smoothing.
+
+        Returns:
+            pd.DataFrame: The smoothed track DataFrame.
+        """
         center_cols = ['x_center', 'y_center']
         track_df[center_cols] = track_df[center_cols].rolling(window=window_size, min_periods=1, center=True).mean()
-        if 'bb_width' in track_df.columns and 'bb_height' in track_df.columns:
-            track_df['bb_left'] = track_df['x_center'] - track_df['bb_width'] / 2
-            track_df['bb_top'] = track_df['y_center'] - track_df['bb_height'] / 2
+        track_df['bb_left'] = track_df['x_center'] - track_df['bb_width'] / 2
+        track_df['bb_top'] = track_df['y_center'] - track_df['bb_height'] / 2
         return track_df
 
     def finalize_tracklist(self, tracks: list[Track], csv_filename: str):
+        """
+        Finalize the track list by stitching, smoothing, and saving to CSV.
+
+        Args:
+            tracks (list[Track]): List of tracks to finalize.
+            csv_filename (str): Output CSV filename.
+        """
         tracks.sort(key=lambda x: x.start_frame)
-        tracks_df = pd.DataFrame()
+        dfs = []
         for i, track in enumerate(tracks):
             final_class, _ = self.rescore(track)
-            final_tracklist = self.stitch_tracks(track.track_list)
-            df = pd.DataFrame(final_tracklist)
-            df["class_name"] = final_class
-            df["tracker_id"] = i + 1
-            df = self.smoothen_trajectory(df.copy())
-            tracks_df = pd.concat([tracks_df, df])
-        if not tracks_df.empty:
-            tracks_df.sort_values(by=["frame_number", "tracker_id"], inplace=True)
-            tracks_df.to_csv(csv_filename, index=False)
+            df = pd.DataFrame(self.stitch_tracks(track.track_list))
+            df["class_name"], df["tracker_id"] = final_class, i + 1
+            dfs.append(self.smoothen_trajectory(df))
+
+        if dfs:
+            final_df = pd.concat(dfs).sort_values(by=["frame_number", "tracker_id"])
+            final_df.to_csv(csv_filename, index=False)
+            print(f'Saved to: {csv_filename}')
 
     def rescore(self, track: Track):
-        tracks = track.track_list
-        class_conf_dict = dict()
-        total_trajectories = len(track.track_list)
-        for t in tracks:
+        """
+        Rescore the class for a track based on confidence.
+
+        Args:
+            track (Track): The track to rescore.
+
+        Returns:
+            tuple: (class_name, average_confidence)
+        """
+        class_conf = {}
+        for t in track.track_list:
             c = t.get("class_name")
-            class_conf_dict[c] = class_conf_dict.get(c, 0) + t.get("confidence")
-        for key in class_conf_dict.keys():
-            class_conf_dict[key] = class_conf_dict[key] / total_trajectories
-        max_class = max(class_conf_dict, key=class_conf_dict.get)
-        return max_class, round(class_conf_dict[max_class], 4)
+            class_conf[c] = class_conf.get(c, 0) + t.get("confidence")
+
+        max_class = max(class_conf, key=lambda k: class_conf[k]/len(track.track_list))
+        return max_class, round(class_conf[max_class]/len(track.track_list), 4)
